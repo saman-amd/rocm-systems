@@ -76,28 +76,31 @@ get_hash_id(Tp&& _val)
 PerfettoTrackGenerator::PerfettoTrackGenerator()
 : track_counter_(0)
 , this_pid_track_(++track_counter_, ::perfetto::Track{})
-{
-}
+{}
 
-const ::perfetto::Track& PerfettoTrackGenerator::get_this_pid_track() const
+const ::perfetto::Track&
+PerfettoTrackGenerator::get_this_pid_track() const
 {
     return this_pid_track_;
 }
 
-const ::perfetto::Track& PerfettoTrackGenerator::get_perfetto_track(pid_t pid, std::string_view name) const
+const ::perfetto::Track&
+PerfettoTrackGenerator::get_perfetto_track(pid_t pid, std::string_view name) const
 {
     std::pair<pid_t, std::string> key(pid, name);
-    auto it = tracks_.find(key);
+    auto                          it = tracks_.find(key);
     if(it != tracks_.end())
     {
         return it->second;
     }
 
-    auto element = tracks_.emplace(std::move(key), ::perfetto::Track{++track_counter_, this_pid_track_});
+    auto element =
+        tracks_.emplace(std::move(key), ::perfetto::Track{++track_counter_, this_pid_track_});
     return element.first->second;
 }
 
-const ::perfetto::Track& PerfettoTrackGenerator::get_perfetto_track(std::string_view name) const
+const ::perfetto::Track&
+PerfettoTrackGenerator::get_perfetto_track(std::string_view name) const
 {
     return get_perfetto_track(std::numeric_limits<pid_t>::max(), name);
 }
@@ -229,7 +232,7 @@ write_perfetto(
     auto           command_line     = ::rocprofiler::sdk::parse::tokenize(process.command, " ");
 
     PerfettoTrackGenerator track_generator;
-    auto this_pid_track = track_generator.get_this_pid_track();
+    auto                   this_pid_track = track_generator.get_this_pid_track();
 
     {
         auto desc = orig_process_desc;
@@ -253,7 +256,7 @@ write_perfetto(
     auto agent_stream_ids = std::unordered_set<rocprofiler_stream_id_t>{};
     auto thread_indexes   = std::unordered_map<uint64_t, uint64_t>{};
 
-    auto thread_tracks = std::unordered_map<uint64_t, ::perfetto::Track>{};
+    auto thread_tracks          = std::unordered_map<uint64_t, ::perfetto::Track>{};
     auto thread_sampling_tracks = std::unordered_map<uint64_t, ::perfetto::Track>{};
     auto agent_thread_tracks =
         std::unordered_map<uint64_t, std::unordered_map<uint64_t, ::perfetto::Track>>{};
@@ -469,13 +472,14 @@ write_perfetto(
         {
             for(auto itr : region_gen.get(ditr))
             {
-                auto& track = std::strcmp(itr.category.c_str(),
-                                             sdk::perfetto_category<sdk::category::timer_sampling>::name) == 0
-                                     ? thread_sampling_tracks.at(itr.tid)
-                                     : thread_tracks.at(itr.tid);
+                auto& track =
+                    std::strcmp(itr.category.c_str(),
+                                sdk::perfetto_category<sdk::category::timer_sampling>::name) == 0
+                        ? thread_sampling_tracks.at(itr.tid)
+                        : thread_tracks.at(itr.tid);
 
-                auto  _name      = itr.name;
-                auto  _operation = itr.name;
+                auto _name      = itr.name;
+                auto _operation = itr.name;
 
                 if(itr.has_extdata())
                 {
