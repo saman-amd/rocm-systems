@@ -138,9 +138,9 @@ struct RocpdImportData
     RocpdImportData()  = default;
     ~RocpdImportData() = default;
 
-    RocpdImportData(const RocpdImportData&)     = default;
-    RocpdImportData(RocpdImportData&&) noexcept = default;
-    RocpdImportData& operator=(const RocpdImportData&) = default;
+    RocpdImportData(const RocpdImportData&)                = default;
+    RocpdImportData(RocpdImportData&&) noexcept            = default;
+    RocpdImportData& operator=(const RocpdImportData&)     = default;
     RocpdImportData& operator=(RocpdImportData&&) noexcept = default;
 
     RocpdImportData(const py::object& _obj, const std::vector<std::string>& _dbs)
@@ -495,59 +495,7 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                 fmt::format("Perfetto generation from {} SQL database(s)", data.size())};
             for(auto obj : {data.connection})
             {
-                auto nodes = rocpd::read<rocpd::types::node>(conn);
-
-                for(const auto& nitr : nodes)
-                {
-                    auto agents = rocpd::read<rocpd::types::agent>(
-                        conn, fmt::format("WHERE guid = '{}' AND nid = {}", nitr.guid, nitr.id));
-                    auto processes = rocpd::read<rocpd::types::process>(
-                        conn, fmt::format("WHERE guid = '{}' AND nid = {}", nitr.guid, nitr.id));
-
-                    for(const auto& pitr : processes)
-                    {
-                        ROCP_FATAL_IF(pitr.nid != nitr.id || pitr.guid != nitr.guid)
-                            << fmt::format("Found process with a mismatched nid/guid. process: "
-                                           "{}/{} vs. node: {}/{}",
-                                           pitr.nid,
-                                           pitr.guid,
-                                           nitr.id,
-                                           nitr.guid);
-                        auto select_guid_nid_pid = [&nitr, &pitr](std::string_view tbl) {
-                            return fmt::format("SELECT * FROM {} WHERE guid = '{}' AND nid "
-                                               "= {} AND pid = {}",
-                                               tbl,
-                                               pitr.guid,
-                                               nitr.id,
-                                               pitr.pid);
-                        };
-
-                        auto _sqlgen_perft = common::simple_timer{fmt::format(
-                            "Perfetto generation from SQL for process {} (total)", pitr.pid)};
-
-                        auto kernels = rocpd::sql_generator<rocpd::types::kernel_dispatch>{
-                            conn, select_guid_nid_pid("kernels"), kernels_order_by};
-
-                        auto memory_allocations =
-                            rocpd::sql_generator<rocpd::types::memory_allocation>{
-                                conn, select_guid_nid_pid("memory_allocations")};
-
-                        auto memory_copies = rocpd::sql_generator<rocpd::types::memory_copies>{
-                            conn, select_guid_nid_pid("memory_copies")};
-
-                        auto graph_launches = rocpd::sql_generator<rocpd::types::graph_launch>{
-                            conn, select_guid_nid_pid("graph_launches")};
-
-                        auto scratch_memory = rocpd::sql_generator<rocpd::types::scratch_memory>{
-                            conn, select_guid_nid_pid("scratch_memory")};
-
-                        auto counters = rocpd::sql_generator<rocpd::types::counter>{
-                            conn, select_guid_nid_pid("counters_collection")};
-
-                        auto regions = rocpd::sql_generator<rocpd::types::region>{
-                            conn, select_guid_nid_pid("regions"), region_order_by};
-
-                        const std::string create_samples_view = R"(
+                 const std::string create_samples_view = R"(
                             CREATE TEMP VIEW
                                 `samples_schema_3_0` AS
                             SELECT
@@ -619,18 +567,9 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                                 AND TH.guid = T.guid;
                         )";
 
-                        execute_raw_sql_statements(conn, create_samples_view);
+                execute_raw_sql_statements(conn, create_samples_view);
 
-                        auto samples = rocpd::sql_generator<rocpd::types::sample>{
-                            conn, select_guid_nid_pid("samples_schema_3_0"), sample_order_by};
-
-                        auto threads = rocpd::sql_generator<rocpd::types::thread>{
-                            conn, select_guid_nid_pid("threads")};
-
-                        auto pmc_info = rocpd::sql_generator<rocpd::types::pmc_info>{
-                            conn, select_guid_nid_pid("pmc_info")};
-
-                        const std::string create_pmc_event_view = R"(
+                const std::string create_pmc_event_view = R"(
                             CREATE TEMP VIEW
                                 `pmc_events_schema_3_0` AS
                             SELECT
@@ -658,7 +597,68 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                                 AND PMC_I.guid = PMC_E.guid;
                         )";
 
-                        execute_raw_sql_statements(conn, create_pmc_event_view);
+                execute_raw_sql_statements(conn, create_pmc_event_view);
+
+                auto nodes = rocpd::read<rocpd::types::node>(conn);
+
+                for(const auto& nitr : nodes)
+                {
+                    auto agents = rocpd::read<rocpd::types::agent>(
+                        conn, fmt::format("WHERE guid = '{}' AND nid = {}", nitr.guid, nitr.id));
+                    auto processes = rocpd::read<rocpd::types::process>(
+                        conn, fmt::format("WHERE guid = '{}' AND nid = {}", nitr.guid, nitr.id));
+
+                    for(const auto& pitr : processes)
+                    {
+                        ROCP_FATAL_IF(pitr.nid != nitr.id || pitr.guid != nitr.guid)
+                            << fmt::format("Found process with a mismatched nid/guid. process: "
+                                           "{}/{} vs. node: {}/{}",
+                                           pitr.nid,
+                                           pitr.guid,
+                                           nitr.id,
+                                           nitr.guid);
+                        auto select_guid_nid_pid = [&nitr, &pitr](std::string_view tbl) {
+                            return fmt::format("SELECT * FROM {} WHERE guid = '{}' AND nid "
+                                               "= {} AND pid = {}",
+                                               tbl,
+                                               pitr.guid,
+                                               nitr.id,
+                                               pitr.pid);
+                        };
+
+                        auto _sqlgen_perft = common::simple_timer{fmt::format(
+                            "Perfetto generation from SQL for process {} (total)", pitr.pid)};
+
+                        auto kernels = rocpd::sql_generator<rocpd::types::kernel_dispatch>{
+                            conn, select_guid_nid_pid("kernels"), kernels_order_by};
+
+                        auto memory_allocations =
+                            rocpd::sql_generator<rocpd::types::memory_allocation>{
+                                conn, select_guid_nid_pid("memory_allocations")};
+
+                        auto memory_copies = rocpd::sql_generator<rocpd::types::memory_copies>{
+                            conn, select_guid_nid_pid("memory_copies")};
+
+                        auto graph_launches = rocpd::sql_generator<rocpd::types::graph_launch>{
+                            conn, select_guid_nid_pid("graph_launches")};
+
+                        auto scratch_memory = rocpd::sql_generator<rocpd::types::scratch_memory>{
+                            conn, select_guid_nid_pid("scratch_memory")};
+
+                        auto counters = rocpd::sql_generator<rocpd::types::counter>{
+                            conn, select_guid_nid_pid("counters_collection")};
+
+                        auto regions = rocpd::sql_generator<rocpd::types::region>{
+                            conn, select_guid_nid_pid("regions"), region_order_by};
+
+                        auto samples = rocpd::sql_generator<rocpd::types::sample>{
+                            conn, select_guid_nid_pid("samples_schema_3_0"), sample_order_by};
+
+                        auto threads = rocpd::sql_generator<rocpd::types::thread>{
+                            conn, select_guid_nid_pid("threads")};
+
+                        auto pmc_info = rocpd::sql_generator<rocpd::types::pmc_info>{
+                            conn, select_guid_nid_pid("pmc_info")};
 
                         auto pmc_events = rocpd::sql_generator<rocpd::types::pmc_event>{
                             conn, select_guid_nid_pid("pmc_events_schema_3_0")};
