@@ -472,14 +472,15 @@ write_perfetto(
                 auto _event      = (ocfg.annotate_kfd) ? read_event(itr.event_id) : types::event{};
                 auto _args       = read_region_args(itr.id);
 
+                auto flow_index = (itr.stack_id == 0) ? (++global_flow_index)
+                                                      : (itr.stack_id ^ this_pid_track.uuid);
+
                 TRACE_EVENT_BEGIN(
                     _category,
                     ::perfetto::DynamicString{_name},
                     track,
                     itr.start,
-                    ::perfetto::Flow::Global(
-                        (itr.stack_id == 0) ? (++global_flow_index)
-                                            : (itr.stack_id ^ this_pid_track.uuid)),
+                    ::perfetto::Flow::Global(flow_index),
                     "begin_ns",
                     itr.start,
                     "end_ns",
@@ -560,13 +561,17 @@ write_perfetto(
                     _track         = &stream_tracks.at(stream_id);
                 }
 
+                auto flow_index = (itr.stack_id == 0) ? (++global_flow_index)
+                                                      : (itr.stack_id ^ this_pid_track.uuid);
+
                 auto src_agent_index = agent_data.at(itr.src_agent_abs_index).second;
                 auto dst_agent_index = agent_data.at(itr.dst_agent_abs_index).second;
+                
                 TRACE_EVENT_BEGIN(sdk::perfetto_category<sdk::category::memory_copy>::name,
                                   ::perfetto::DynamicString{itr.name},
                                   *_track,
                                   itr.start,
-                                  ::perfetto::Flow::Global(++global_flow_index),
+                                  ::perfetto::Flow::Global(flow_index),
                                   "begin_ns",
                                   itr.start,
                                   "end_ns",
@@ -798,11 +803,16 @@ write_perfetto(
                 auto agent_index = agent_data.at(current.agent_abs_index).second;
                 auto _name =
                     (ocfg.kernel_rename && !current.region.empty()) ? current.region : current.name;
+
+                auto flow_index = (current.stack_id == 0)
+                                      ? (++global_flow_index)
+                                      : (current.stack_id ^ this_pid_track.uuid);
+
                 TRACE_EVENT_BEGIN(sdk::perfetto_category<sdk::category::kernel_dispatch>::name,
                                   ::perfetto::DynamicString{_name},
                                   *_track,
                                   current.start,
-                                  ::perfetto::Flow::Global(++global_flow_index),
+                                  ::perfetto::Flow::Global(flow_index),
                                   "begin_ns",
                                   current.start,
                                   "end_ns",
