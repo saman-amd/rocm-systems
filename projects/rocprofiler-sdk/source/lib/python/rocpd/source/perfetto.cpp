@@ -663,7 +663,7 @@ write_perfetto(
 
                 auto src_agent_index = agent_data.at(itr.src_agent_abs_index).second;
                 auto dst_agent_index = agent_data.at(itr.dst_agent_abs_index).second;
-                
+
                 TRACE_EVENT_BEGIN(sdk::perfetto_category<sdk::category::memory_copy>::name,
                                   ::perfetto::DynamicString{itr.name},
                                   *_track,
@@ -974,7 +974,7 @@ write_perfetto(
                 if(track_data.size() != 1)
                 {
                     if(data.agent_type == "CPU")
-                        track_name << " [" << track_index.first - 1 << "]";
+                        track_name << " [" << track_index.first << "]";
                     else if(data.agent_type == "GPU")
                         track_name << " [" << track_index.second - 1 << "]";
                 }
