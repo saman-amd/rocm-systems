@@ -91,4 +91,16 @@ TEST(HipFileEnvironment, GetUnsignedIntReturnsIntIfValueIsInt)
     ASSERT_EQ(hipFile::Environment::get<unsigned int>(""), make_optional<>(0));
 }
 
+TEST(HipFileEnvironment, GetUnsignedItegralOverloads)
+{
+    StrictMock<MSys> msys;
+
+    EXPECT_CALL(msys, getenv).WillOnce(Return(const_cast<char *>("1")));
+    ASSERT_EQ(hipFile::Environment::get<unsigned int>(""), make_optional<>(1));
+    EXPECT_CALL(msys, getenv).WillOnce(Return(const_cast<char *>("2")));
+    ASSERT_EQ(hipFile::Environment::get<unsigned long>(""), make_optional<>(2ul));
+    EXPECT_CALL(msys, getenv).WillOnce(Return(const_cast<char *>("3")));
+    ASSERT_EQ(hipFile::Environment::get<unsigned short>(""), make_optional<>(static_cast<unsigned short>(3)));
+}
+
 HIPFILE_WARN_NO_GLOBAL_CTOR_ON
