@@ -64,3 +64,11 @@ Configuration::unsupportedFileSystems() const noexcept
     static bool unsupported_file_systems_env{Environment::unsupported_file_systems().value_or(false)};
     return unsupported_file_systems_env;
 }
+
+size_t
+Configuration::asyncBufferSize() const noexcept
+{
+    static constexpr size_t default_async_buffer_size{1 << 20}; // 1 MiB
+    static size_t async_buffer_size_env{Environment::async_buffer_size().value_or(default_async_buffer_size)};
+    return async_buffer_size_env;
+}
