@@ -90,6 +90,7 @@ add_subdirectory(rocjpeg)
 add_subdirectory(hipfile)
 add_subdirectory(hip-host-tracing)
 add_subdirectory(code-object-multi-threaded)
+add_subdirectory(hip-buffered-dangling-arg)
 add_subdirectory(spm)
 
 # environment variable tests
