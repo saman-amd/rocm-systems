@@ -12,9 +12,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>
@@ -360,7 +362,6 @@ public:
   void cleanup();
 
   /// @brief Drop inherited overlay ownership without removing parent-owned paths.
-  void release_after_fork();
 
   /// @brief Generated KFD topology root.
   [[nodiscard]] const std::string &topology_path() const { return topology_dir_; }
@@ -530,13 +531,6 @@ void GuestKfd::TopologyOverlay::cleanup() {
   guest_sysfs_.cleanup();
 }
 
-void GuestKfd::TopologyOverlay::release_after_fork() {
-  topology_dir_.clear();
-  guest_drm_dir_.clear();
-  guest_node_id_ = 0;
-  guest_sysfs_.release_after_fork();
-}
-
 GuestKfd::GuestKfd(config::DbtGuestConfig config, LinuxKfd *execution_driver)
     : config_(std::move(config)), execution_driver_(execution_driver),
       overlay_(std::make_unique<TopologyOverlay>()),
@@ -552,30 +546,16 @@ GuestKfd::GuestKfd(config::DbtGuestConfig config, LinuxKfd *execution_driver)
 }
 
 GuestKfd::~GuestKfd() {
+  // The synthetic descriptor is this object's own; nothing else closes it once the
+  // driver is gone.
+  const int synthetic = app_fd_.exchange(-1, std::memory_order_acq_rel);
+  if (synthetic >= 0)
+    libc_passthrough().close(synthetic);
   int kfd_fd = real_kfd_fd_.load(std::memory_order_acquire);
   if (execution_driver_ && owns_execution_driver_open_)
     execution_driver_->close();
   else if (kfd_fd >= 0 && !execution_driver_)
     libc_passthrough().close(kfd_fd);
-}
-
-void GuestKfd::reset_after_fork() {
-  // After fork() only the calling thread survives. If another parent thread was
-  // in an ioctl or close path, mutex_ may be inherited as permanently locked in
-  // the child. Reinitialize it in-place before touching ordinary members; the
-  // child is single-threaded here and the interposer destroys this copy next.
-  new (&mutex_) std::mutex();
-  ready_.store(false, std::memory_order_release);
-  int kfd_fd = real_kfd_fd_.exchange(-1, std::memory_order_acq_rel);
-  if (kfd_fd >= 0 && !execution_driver_)
-    libc_passthrough().close(kfd_fd);
-  owns_execution_driver_open_ = false;
-  execution_driver_ = nullptr;
-  open_refs_ = 0;
-  overlay_->release_after_fork();
-  synthetic_handles_.clear();
-  synthetic_mmap_offsets_.clear();
-  next_synthetic_handle_ = kSyntheticHandleBase;
 }
 
 bool GuestKfd::ensure_real_kfd_locked() {
@@ -662,6 +642,16 @@ bool GuestKfd::ensure_ready_locked() {
 
 bool GuestKfd::prepare_for_discovery() { return ensure_ready(); }
 
+bool GuestKfd::ensure_app_fd_locked() {
+  if (app_fd_.load(std::memory_order_acquire) >= 0)
+    return true;
+  const int minted = memfd_create("rocjitsu_guest_kfd", MFD_CLOEXEC);
+  if (minted < 0)
+    return false;
+  app_fd_.store(minted, std::memory_order_release);
+  return true;
+}
+
 int GuestKfd::open() {
   std::lock_guard lock(mutex_);
   if (!ensure_ready_locked())
@@ -687,11 +677,29 @@ int GuestKfd::open() {
     return -1;
   }
 
-  // Keep the real /dev/kfd fd internal to the driver. Applications receive
-  // ordinary dup fds, so close(fd) releases that fd number immediately while
-  // the hidden real fd keeps host-KFD forwarding alive until the last
-  // app-facing open/dup reference is closed.
-  const int app_fd = libc_passthrough().fcntl(kfd_fd, F_DUPFD_CLOEXEC, 0);
+  // Applications receive a DISTINCT descriptor per open, duplicated from a
+  // synthetic memfd -- never from the real /dev/kfd. Two properties matter and both
+  // are load-bearing:
+  //
+  //   * Synthetic. A real duplicate would let a forked child -- whose calls the
+  //     interposer passes straight to libc under the fork-then-exec contract --
+  //     operate real hardware through the inherited fd, and dup2() it without
+  //     FD_CLOEXEC to carry that authority across exec. A memfd dup is inert.
+  //   * Distinct. Real KFD returns a fresh descriptor per open, and callers close
+  //     them independently; handing the same number to concurrent openers would let
+  //     one thread's close() invalidate another's live fd.
+  //
+  // The real fd stays in real_kfd_fd_, private to this object, and every forwarded
+  // operation uses it from there.
+  if (!ensure_app_fd_locked()) {
+    if (opened_execution_driver) {
+      execution_driver_->close();
+      owns_execution_driver_open_ = false;
+    }
+    return -1;
+  }
+  const int app_fd =
+      libc_passthrough().fcntl(app_fd_.load(std::memory_order_acquire), F_DUPFD_CLOEXEC, 0);
   if (app_fd < 0) {
     if (opened_execution_driver) {
       execution_driver_->close();
@@ -712,10 +720,42 @@ bool GuestKfd::retain_local_open() {
   return false;
 }
 
+uint32_t GuestKfd::local_open_ref_count() const {
+  std::lock_guard lock(mutex_);
+  return open_refs_;
+}
+
+void GuestKfd::begin_local_shutdown() {
+  // Release any parked WAIT_EVENTS so it returns and drops the driver snapshot that
+  // would otherwise keep this object alive. Snapshot execution_driver_ under
+  // mutex_, then call with the lock released (its begin_local_shutdown() takes the
+  // simulator's own process mutex; holding GuestKfd::mutex_ across it is
+  // unnecessary). A simulator-backed guest forwards to that driver. A hardware-
+  // backed guest has no execution_driver_ and forwards WAIT_EVENTS to the real
+  // kernel as bounded polls (forward_wait_events_bounded), so set hw_closing_ to
+  // cancel an in-flight poll loop instead.
+  LinuxKfd *execution_driver = nullptr;
+  {
+    std::lock_guard lock(mutex_);
+    execution_driver = execution_driver_;
+  }
+  if (execution_driver)
+    execution_driver->begin_local_shutdown();
+  else
+    hw_closing_.store(true, std::memory_order_release);
+}
+
 LinuxKfd::PrimaryInvalidation GuestKfd::invalidate_primary_fd(int fd) {
   if (fd < 0)
     return PrimaryInvalidation::kNotPrimary;
   std::lock_guard lock(mutex_);
+  // The synthetic backing memfd is internal, like the real fd: app-facing dups
+  // carry the counted references, so an overwrite of this number must NOT release
+  // one. A later open() re-mints the backing.
+  int expected_app = fd;
+  if (app_fd_.compare_exchange_strong(expected_app, -1, std::memory_order_acq_rel))
+    return PrimaryInvalidation::kClearedKeepRefs;
+
   // Compare-and-clear the hidden real fd number. Do NOT close it: dup2/dup3
   // already atomically replaced whatever this number named, so closing it here
   // would close the app's replacement. A concurrent overwrite that already
@@ -756,10 +796,16 @@ int GuestKfd::close() {
     if (open_refs_ != 0)
       return 0;
 
-    // The app sees a real KFD fd, but the interposer owns close ordering so
-    // dup'd descriptors can keep the process KFD connection alive. Only the
-    // final open reference closes the primary real fd and tears down discovery
-    // state; the close hook separately closes any dup fd that triggered this.
+    // The app sees only the synthetic descriptor; the interposer owns close
+    // ordering so app-facing references keep the host KFD connection alive. Only
+    // the final open reference closes the private real fd and tears down discovery
+    // state; the close hook separately closes the app fd that triggered this.
+    //
+    // The synthetic BACKING memfd is deliberately retained across close/reopen
+    // epochs and released only in the destructor. Clearing it here without closing
+    // leaked one descriptor per epoch; closing it here instead would need the close
+    // to happen outside mutex_, and there is nothing to gain -- the backing is
+    // inert, private, and reused by the next open().
     kfd_fd = real_kfd_fd_.exchange(-1, std::memory_order_acq_rel);
     if (execution_driver_ && owns_execution_driver_open_) {
       execution_driver_to_close = execution_driver_;
@@ -787,7 +833,7 @@ int GuestKfd::forward_ioctl(unsigned long request, void *arg) {
   if (execution_driver_)
     return execution_driver_->ioctl(request, arg);
 
-  int kfd_fd = fd();
+  int kfd_fd = host_fd();
   if (kfd_fd < 0) {
     errno = ENODEV;
     return -1;
@@ -802,6 +848,71 @@ int GuestKfd::forward_ioctl(unsigned long request, void *arg) {
     return -1;
   }
   return ret;
+}
+
+int GuestKfd::forward_wait_events_bounded(unsigned long request, void *arg) {
+  int kfd_fd = host_fd();
+  if (kfd_fd < 0) {
+    errno = ENODEV;
+    return -1;
+  }
+  // Forward a null arg unchanged rather than dereferencing it for the timeout: the
+  // kernel answers it with EFAULT/EINVAL, and the interposer must reproduce that
+  // failure instead of segfaulting inside the caller's ioctl().
+  if (!arg)
+    return forward_ioctl(request, arg);
+  auto *wait_args = static_cast<kfd_ioctl_wait_events_args *>(arg);
+  return wait_events_poll_loop(*wait_args, hw_closing_,
+                               [&] { return forward_ioctl(request, arg); });
+}
+
+int GuestKfd::wait_events_poll_loop(kfd_ioctl_wait_events_args &args,
+                                    const std::atomic<bool> &cancelled,
+                                    const std::function<int()> &poll) {
+  const uint32_t original_timeout = args.timeout;
+
+  // A zero-timeout poll already returns promptly; forward it unchanged.
+  if (original_timeout == 0)
+    return poll();
+
+  // Break a long/indefinite wait into short kernel polls, re-checking the
+  // cancellation flag between iterations so begin_local_shutdown() can cancel it
+  // and the caller's driver snapshot drops. The per-poll timeout bounds how long a
+  // single blocking syscall can hold it. Mirrors RemoteDriver's client-side
+  // WAIT_EVENTS loop.
+  constexpr uint32_t kPollMs = 5;
+  const bool indefinite = original_timeout >= 0xFFFFFFFEu;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(original_timeout);
+
+  for (;;) {
+    if (cancelled.load(std::memory_order_acquire)) {
+      // Report a benign timeout so the caller re-polls (and observes the driver
+      // going away) rather than treating the cancellation as an event completion.
+      args.timeout = original_timeout;
+      args.wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+      return 0;
+    }
+    // Clamp the slice to what the caller actually has left, so a short wait is not
+    // rounded UP to kPollMs (WAIT_EVENTS(timeout=1) must not block 5 ms). The
+    // deadline is only re-tested after a poll returns, so without this the first
+    // poll alone can overshoot the whole budget.
+    args.timeout = kPollMs;
+    if (!indefinite) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+      const auto remaining_ms =
+          remaining.count() > 0 ? static_cast<uint64_t>(remaining.count()) : 0;
+      args.timeout = static_cast<uint32_t>(std::min<uint64_t>(kPollMs, remaining_ms));
+    }
+    int rc = poll();
+    args.timeout = original_timeout;
+    if (rc != 0)
+      return rc;
+    if (args.wait_result != KFD_IOC_WAIT_RESULT_TIMEOUT)
+      return 0;
+    if (!indefinite && std::chrono::steady_clock::now() >= deadline)
+      return 0; // real timeout: leave wait_result == TIMEOUT
+  }
 }
 
 int GuestKfd::get_process_apertures_ioctl(void *arg) {
@@ -1037,6 +1148,14 @@ int GuestKfd::ioctl(unsigned long request, void *arg) {
   case AMDKFD_IOC_SET_XNACK_MODE:
   case AMDKFD_IOC_RUNTIME_ENABLE:
     return forward_ioctl(request, arg);
+  case AMDKFD_IOC_WAIT_EVENTS:
+    // A simulator-backed guest routes WAIT_EVENTS to execution_driver_ (whose own
+    // begin_local_shutdown() wakes it). A hardware-backed guest forwards to the
+    // real kernel, where an indefinite wait would deadlock teardown under the
+    // interposer's driver snapshot alive, so break it into bounded, cancellable polls.
+    if (execution_driver_)
+      return forward_ioctl(request, arg);
+    return forward_wait_events_bounded(request, arg);
   default:
     if (request_targets_guest(request, arg))
       return reject_guest_execution_ioctl(request, arg);
@@ -1047,7 +1166,7 @@ int GuestKfd::ioctl(unsigned long request, void *arg) {
 void *GuestKfd::mmap(void *addr, size_t length, int prot, int flags, off_t offset) {
   if (!ensure_ready())
     return MAP_FAILED;
-  int kfd_fd = fd();
+  int kfd_fd = host_fd();
   if (kfd_fd < 0) {
     errno = ENODEV;
     return MAP_FAILED;
@@ -1078,12 +1197,16 @@ int GuestKfd::munmap(void *addr, size_t length) {
 bool GuestKfd::owns_fd(int fd) const {
   if (fd < 0)
     return false;
+  if (fd == app_fd_.load(std::memory_order_acquire))
+    return true;
   if (fd == real_kfd_fd_.load(std::memory_order_acquire))
     return true;
   return execution_driver_ && execution_driver_->owns_fd(fd);
 }
 
 int GuestKfd::fd() const { return real_kfd_fd_.load(std::memory_order_acquire); }
+
+int GuestKfd::host_fd() const { return real_kfd_fd_.load(std::memory_order_acquire); }
 
 std::string GuestKfd::redirect_sysfs_path(const char *path) const {
   if (!path)

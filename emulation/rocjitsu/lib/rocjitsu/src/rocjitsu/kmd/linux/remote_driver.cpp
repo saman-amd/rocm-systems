@@ -765,6 +765,12 @@ int RemoteDriver::send_ioctl(unsigned long request, void *arg) {
   // Owned only for the duration of the send: SCM_RIGHTS installs the daemon's
   // own copies, so ours are released on every path out of here, including the
   // early returns below.
+  //
+  // These remain util::UniqueHandle (closing via ::close, i.e. through the
+  // interposer's own close hook) because RemoteDriver descriptors are the daemon
+  // client's own and the interposer's close hook classifies them as untracked and
+  // passes them through. Driver-owned fds on the LOCAL path use UniqueDriverFd
+  // instead; see PassthroughFdTraits.
   util::UniqueHandle target_mem_fd;
   util::UniqueHandle target_proc_fd;
   if (request == AMDKFD_IOC_DBG_TRAP) {

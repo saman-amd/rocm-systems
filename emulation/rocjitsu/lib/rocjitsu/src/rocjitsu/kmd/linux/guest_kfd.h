@@ -19,12 +19,15 @@ RJ_DIAGNOSTIC_POP
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_set>
 
 namespace rocjitsu {
+
+class GuestKfdTestAccess;
 
 /// @brief KFD driver that exposes a guest GPU for DBT while forwarding host GPU work.
 ///
@@ -89,9 +92,6 @@ public:
   /// @brief Return the simulated host DRM root, or empty for hardware execution.
   [[nodiscard]] std::string drm_path() const override;
 
-  /// @brief Detach inherited child-process state before destroying this copy.
-  void reset_after_fork() override;
-
   /// @brief Prepare guest discovery without retaining an application open fd.
   bool prepare_for_discovery();
 
@@ -99,6 +99,26 @@ public:
   /// @retval true A reference was added.
   /// @retval false No live guest process to retain.
   [[nodiscard]] bool retain_local_open() override;
+
+  /// @brief Number of app-facing KFD descriptor references still live.
+  /// @details Only application-visible dup fds are counted — the internal real
+  /// /dev/kfd fd is not — so this driver's count is zero at publication and its
+  /// teardown baseline is zero.
+  [[nodiscard]] uint32_t local_open_ref_count() const override;
+
+  /// @brief Release blocking calls before teardown so their driver snapshot drops.
+  /// @details Two distinct backends, one contract — in both cases a parked
+  /// WAIT_EVENTS returns a benign KFD_IOC_WAIT_RESULT_TIMEOUT and nothing else is
+  /// mutated:
+  /// - Simulator execution: WAIT_EVENTS is served by the SimulatedKfd execution
+  ///   driver, so this DELEGATES to it and its local process's waiters are
+  ///   released.
+  /// - Hardware execution: WAIT_EVENTS is forwarded to the real kernel, which this
+  ///   process cannot interrupt. Instead this sets hw_closing_, which
+  ///   forward_wait_events_bounded()'s poll loop observes between its short kernel
+  ///   polls and returns on — CANCELLING the wait rather than waking it.
+  /// Idempotent.
+  void begin_local_shutdown() override;
 
   /// @brief Stop classifying the hidden real /dev/kfd fd number as KFD after a
   /// dup2/dup3 overwrote it.
@@ -115,6 +135,8 @@ public:
   [[nodiscard]] PrimaryInvalidation invalidate_primary_fd(int fd) override;
 
 private:
+  friend class GuestKfdTestAccess;
+
   class TopologyOverlay;
 
   /// @brief Open real KFD, generate topology, and select the host GPU.
@@ -128,6 +150,31 @@ private:
 
   /// @brief Forward one ioctl to the real /dev/kfd fd.
   int forward_ioctl(unsigned long request, void *arg);
+
+  /// @brief Forward WAIT_EVENTS to the real kernel as bounded, cancellable polls.
+  /// @details A hardware-backed guest has no simulator wait to wake, and the real
+  /// kernel WAIT_EVENTS can block indefinitely. The interposer dispatches this
+  /// ioctl while holding a driver snapshot, so an indefinite kernel wait
+  /// would keep that pin held and deadlock teardown (begin_local_shutdown() cannot
+  /// wake a kernel syscall, and closing the fd does not cancel an in-flight wait).
+  /// This breaks a long/indefinite wait into short kernel polls that re-check
+  /// hw_closing_ between iterations, so begin_local_shutdown() can cancel it and the
+  /// pin drains promptly. Mirrors the RemoteDriver client-side WAIT_EVENTS loop.
+  int forward_wait_events_bounded(unsigned long request, void *arg);
+
+  /// @brief The bounded-poll algorithm behind forward_wait_events_bounded().
+  /// @details Split out and fully injected so its four outcomes — zero-timeout
+  /// pass-through, cancellation (with the caller's timeout restored), indefinite
+  /// polling until an event completes, and finite-deadline expiry — are unit
+  /// testable without a real /dev/kfd. @p poll performs ONE short kernel poll,
+  /// reading and writing @p args (the loop has already set args.timeout to the
+  /// per-poll slice) and returning the ioctl result. @p cancelled is the flag
+  /// begin_local_shutdown() sets; it is re-read between polls, never inside one.
+  /// @returns The ioctl result to hand back to the caller; args.timeout is always
+  /// restored to the caller's original value before returning.
+  static int wait_events_poll_loop(kfd_ioctl_wait_events_args &args,
+                                   const std::atomic<bool> &cancelled,
+                                   const std::function<int()> &poll);
 
   /// @brief Return real process apertures plus one synthetic guest aperture.
   int get_process_apertures_ioctl(void *arg) override;
@@ -183,6 +230,42 @@ private:
   std::unordered_set<uint64_t> synthetic_handles_;
   std::unordered_set<uint64_t> synthetic_mmap_offsets_;
   std::atomic<bool> ready_{false};
+  /// @brief Set by begin_local_shutdown() for a hardware-backed guest so an
+  /// in-flight bounded WAIT_EVENTS poll loop returns and drops its driver snapshot
+  /// before teardown.
+  std::atomic<bool> hw_closing_{false};
+  /// @brief The synthetic descriptor applications receive from open().
+  /// @details A memfd, NEVER a duplicate of the real /dev/kfd, mirroring what
+  /// SimulatedKfd hands out. This is a security boundary, not a convenience: a
+  /// forked child inherits the parent's descriptor table, and under the
+  /// fork-then-exec contract the interposer passes a child's ioctl/dup/dup2/fcntl
+  /// straight to libc. Had the app-facing fd been a real KFD duplicate, that child
+  /// could drive real hardware through it and dup2() it to clear FD_CLOEXEC and
+  /// carry it across the exec that was supposed to sanitize the process. A memfd
+  /// carries no such authority: inherited, it is inert.
+  std::atomic<int> app_fd_{-1};
+
+  /// @brief Create the synthetic app-facing descriptor once. Caller holds mutex_.
+  bool ensure_app_fd_locked();
+
+  /// @brief The PRIVATE real /dev/kfd descriptor used for host forwarding.
+  /// @details Never returned to an application; see app_fd_.
+  [[nodiscard]] int host_fd() const;
+};
+
+/// @brief Test-only handle to GuestKfd's internal bounded-wait algorithm.
+/// @details wait_events_poll_loop() is the cancellation contract the interposer's
+/// teardown depends on for a hardware-backed guest, but reaching it through
+/// GuestKfd::ioctl() needs a real /dev/kfd. It is a pure function of its injected
+/// poll and cancellation flag, so exposing it here lets the contract be tested on
+/// any host. Nothing outside tests may use this.
+class GuestKfdTestAccess {
+public:
+  static int wait_events_poll_loop(kfd_ioctl_wait_events_args &args,
+                                   const std::atomic<bool> &cancelled,
+                                   const std::function<int()> &poll) {
+    return GuestKfd::wait_events_poll_loop(args, cancelled, poll);
+  }
 };
 
 } // namespace rocjitsu

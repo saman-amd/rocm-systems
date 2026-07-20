@@ -1096,22 +1096,22 @@ rj_add_test(
 )
 if(RJ_HAS_GFX1201_GPU)
     add_test(
-        NAME "GuestKfdMultiprocessTest.ForkedChildrenDoNotRemoveParentOverlay"
+        NAME
+            "GuestKfdMultiprocessTest.ForkedChildrenRefuseGpuAndLeaveParentOverlayIntact"
         COMMAND
             ${RJ_CLI} --config
             ${CMAKE_SOURCE_DIR}/configs/guest_gfx950_on_gfx1201.json --
             $<TARGET_FILE:guest_kfd_test>
-            --gtest_filter=GuestKfdMultiprocessTest.ForkedChildrenDoNotRemoveParentOverlay
+            --gtest_filter=GuestKfdMultiprocessTest.ForkedChildrenRefuseGpuAndLeaveParentOverlayIntact
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
     add_test(
-        NAME
-            "GuestKfdMultiprocessTest.ForkedChildDropsInheritedGuestDriverBeforeReopen"
+        NAME "GuestKfdMultiprocessTest.ForkedChildCannotUseInheritedGuestDriver"
         COMMAND
             ${RJ_CLI} --config
             ${CMAKE_SOURCE_DIR}/configs/guest_gfx950_on_gfx1201.json --
             $<TARGET_FILE:guest_kfd_test>
-            --gtest_filter=GuestKfdMultiprocessTest.ForkedChildDropsInheritedGuestDriverBeforeReopen
+            --gtest_filter=GuestKfdMultiprocessTest.ForkedChildCannotUseInheritedGuestDriver
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
     add_test(
@@ -1151,8 +1151,8 @@ if(RJ_HAS_GFX1201_GPU)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
     set_tests_properties(
-        "GuestKfdMultiprocessTest.ForkedChildrenDoNotRemoveParentOverlay"
-        "GuestKfdMultiprocessTest.ForkedChildDropsInheritedGuestDriverBeforeReopen"
+        "GuestKfdMultiprocessTest.ForkedChildrenRefuseGpuAndLeaveParentOverlayIntact"
+        "GuestKfdMultiprocessTest.ForkedChildCannotUseInheritedGuestDriver"
         "GuestKfdConcurrencyTest.ConcurrentOpenIoctlAndSysfsRedirect"
         "GuestKfdLifecycleTest.ReopensAfterLastClose"
         "GuestKfdMemoryTest.GuestAllocationMmapOffsetIsRejected"
@@ -1163,8 +1163,8 @@ if(RJ_HAS_GFX1201_GPU)
         _guest_kfd_test
         IN
         ITEMS
-            "GuestKfdMultiprocessTest.ForkedChildrenDoNotRemoveParentOverlay"
-            "GuestKfdMultiprocessTest.ForkedChildDropsInheritedGuestDriverBeforeReopen"
+            "GuestKfdMultiprocessTest.ForkedChildrenRefuseGpuAndLeaveParentOverlayIntact"
+            "GuestKfdMultiprocessTest.ForkedChildCannotUseInheritedGuestDriver"
             "GuestKfdConcurrencyTest.ConcurrentOpenIoctlAndSysfsRedirect"
             "GuestKfdLifecycleTest.ReopensAfterLastClose"
             "GuestKfdMemoryTest.GuestAllocationMmapOffsetIsRejected"
@@ -1445,6 +1445,24 @@ rj_add_interposer_test_suite(
 )
 
 rj_add_interposer_test_suite(
+    InterposerForkTest
+    ChildRefusesGpuEndpointsBeforeExec
+    ChildRefusesEveryGpuEndpointSpelling
+    ChildRefusesAnEmulatedEndpointTheHostDoesNotHave
+    ChildFailsClosedOnAnUnclassifiablePath
+    ChildClassifiesGpuEndpointsByIdentityNotName
+    AppDescriptorCarriesNoRealHardwareAuthority
+    ChildRefusesOperationsOnInheritedRealGpuDescriptors
+    ChildCannotLaunderInheritedGpuFdAcrossExec
+    ChildRefusesMmap64OnInheritedGpuFd
+    ChildRefusesDup3OnInheritedGpuFd
+    ChildFopenPreservesLibcModeSemantics
+    MultithreadedForkExecAlwaysReachesExec
+    SystemAndPopenWorkFromAMultithreadedParent
+    PosixSpawnFromAMultithreadedParent
+)
+
+rj_add_interposer_test_suite(
     InterposerGemTest
     GemNamespaceIsPrivateButSharedByDuplicates
     IndependentDrmFilesRejectOverlappingMappings
@@ -1471,15 +1489,6 @@ set(_rj_interposer_syncobj_tests
     ConcurrentVmUpdatesShareTimeline
     OutOfOrderTimelinePointPreservesWatermark
 )
-# TSan cannot start new threads after a multithreaded fork. This regression
-# intentionally exercises inherited interposer state in that unsupported child,
-# so retain it for regular and ASan builds and omit it from TSan configurations.
-if(NOT RJ_ENABLE_TSAN)
-    list(
-        APPEND _rj_interposer_syncobj_tests
-        ForkedChildReinitializesTimelineFutexState
-    )
-endif()
 rj_add_interposer_test_suite(
     InterposerSyncobjTest
     ${_rj_interposer_syncobj_tests}

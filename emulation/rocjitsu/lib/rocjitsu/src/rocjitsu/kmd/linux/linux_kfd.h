@@ -44,15 +44,34 @@ public:
   /// @brief Return the /dev/kfd fd represented by this driver.
   [[nodiscard]] virtual int fd() const = 0;
 
-  /// @brief Reset inherited child-process state after fork().
-  virtual void reset_after_fork() {}
-
   /// @brief Retain one duplicate open reference, if this driver tracks them.
   /// @retval true A reference was added.
   /// @retval false This driver does not track open references, or there is no
   ///         live local process to retain (e.g. it was already torn down); the
   ///         caller must NOT treat the fd as retained.
   [[nodiscard]] virtual bool retain_local_open() { return false; }
+
+  /// @brief Number of open references this driver currently holds.
+  /// @details The interposer decides when the local backend may be torn down by
+  /// comparing this against the count it observed at publication (see
+  /// InterposerContext::local_open_ref_baseline_), so a driver reports its RAW
+  /// count here and does not need to know which references were app-facing.
+  /// Default 0 for drivers that track no references — they are always idle.
+  [[nodiscard]] virtual uint32_t local_open_ref_count() const { return 0; }
+
+  /// @brief Release any thread blocked in a driver call so it returns and drops
+  /// its driver snapshot, allowing teardown to complete.
+  /// @details Called by the interposer once it has decided to tear the local
+  /// backend down. A thread parked in an indefinite AMDKFD_IOC_WAIT_EVENTS holds a
+  /// snapshot for the whole call, which would keep the driver alive indefinitely;
+  /// only the driver can end that wait, since closing an fd does not cancel an
+  /// in-flight one.
+  ///
+  /// Released waiters report a benign KFD_IOC_WAIT_RESULT_TIMEOUT, which every
+  /// caller already re-polls on; this mutates no event, page, or process state.
+  /// The destructive part of teardown belongs to close(). Default no-op for drivers
+  /// with no blocking calls. Idempotent.
+  virtual void begin_local_shutdown() {}
 
   /// @brief Outcome of invalidate_primary_fd(), telling the interposer how to
   /// follow up on a dup2/dup3 that overwrote a primary KFD fd number.

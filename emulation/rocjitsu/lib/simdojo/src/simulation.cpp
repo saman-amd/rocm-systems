@@ -3,8 +3,11 @@
 
 #include "simdojo/sim/simulation.h"
 
+#include "util/log.h"
+
 #include <algorithm>
 #include <cassert>
+#include <exception>
 #include <stdexcept>
 #include <string>
 
@@ -46,6 +49,9 @@ void SimulationEngine::create() {
   setup_partitions();
 
   done_.store(false, std::memory_order_release);
+  startup_complete_.store(false, std::memory_order_release);
+  startup_failed_.store(false, std::memory_order_release);
+  components_shut_down_ = false;
   active_primaries_.store(0, std::memory_order_release);
   has_primaries_.store(false, std::memory_order_release);
   exit_status_ = {};
@@ -70,7 +76,11 @@ void SimulationEngine::shutdown() {
 
   workers_.clear();
   barrier_.reset();
-  shutdown_components();
+  // Capture, do not propagate: engine cleanup below MUST still run, and shutdown()
+  // is reached from ~SimulationEngine(), from rj_vm_run() on the engine's own
+  // background thread, and across the C API — none of which can absorb an
+  // exception. A failing component hook is reported, not thrown.
+  std::exception_ptr component_failure = shutdown_components();
 
   running_ = false;
   {
@@ -83,6 +93,7 @@ void SimulationEngine::shutdown() {
     async_queues_.clear();
   }
   created_ = false;
+  report_component_failure(component_failure, "engine shutdown");
 }
 
 void SimulationEngine::setup_partitions() {
@@ -125,8 +136,44 @@ ExitStatus SimulationEngine::run() {
   assert(created_ && "run() called before create()");
   const uint32_t num_threads = config_.num_threads;
 
-  startup_components();
+  // A component startup() can throw. run() may execute on a background thread
+  // (the LD_PRELOAD interposer's local VM) whose top-level lambda has no catch, so
+  // an escaping exception would call std::terminate AND leave wait_until_started()
+  // blocked forever (startup_complete_ never set). Catch it, latch readiness with a
+  // failure flag so waiters wake and can unwind, and return an error ExitStatus
+  // rather than running the epoch loop against half-started components.
+  // A startup() throw makes this create() generation terminal: partition/async
+  // event queues, primary counters, and per-component state from the partial
+  // attempt are left intact, so re-running startup on top of them would
+  // double-schedule events and double-register primaries. Refuse to re-run and
+  // require shutdown() + create() for a clean generation. Deliberately a RUNTIME
+  // guard with NO paired assert: an assert would abort in assertion-enabled builds
+  // and return in release ones, so the API's behaviour would depend on the build.
+  // Copied under exit_mutex_ like the normal return below: a foreign thread can be
+  // inside request_exit() assigning exit_status_, whose message is a std::string.
+  if (startup_failed()) {
+    std::lock_guard<std::mutex> lock(exit_mutex_);
+    return exit_status_;
+  }
+  try {
+    startup_components();
+  } catch (const std::exception &e) {
+    fail_startup(std::string("component startup failed: ") + e.what());
+  } catch (...) {
+    // The engine may run on a background thread whose lambda has no catch, so a
+    // non-std::exception throw would still call std::terminate. Latch failure and
+    // return an error status for those too, matching step()'s catch (...).
+    fail_startup("component startup failed with a non-standard exception");
+  }
+  if (startup_failed()) {
+    std::lock_guard<std::mutex> lock(exit_mutex_);
+    return exit_status_;
+  }
   running_ = true;
+  // Publish readiness only after every component's startup() has run, so an
+  // embedding that launched run() on a background thread (the LD_PRELOAD
+  // interposer's local VM) does not expose a half-started device.
+  latch_startup(/*failed=*/false);
   pacer_.anchor(0);
 
   if (config_.max_ticks > 0 && num_threads == 1) {
@@ -158,13 +205,69 @@ ExitStatus SimulationEngine::run() {
   return exit_status_;
 }
 
+void SimulationEngine::fail_startup(std::string message) {
+  set_exit(ExitReason::INTERRUPTED, current_time_.load(std::memory_order_acquire),
+           std::move(message), /*code=*/1);
+  // Publish the terminal failure BEFORE unwinding: shutdown() hooks are not
+  // noexcept, and a throwing one must not escape past the latch and strand
+  // wait_until_started() (see fail_startup's declaration).
+  latch_startup(/*failed=*/true);
+  report_component_failure(shutdown_components(), "startup unwind");
+}
+
+void SimulationEngine::report_component_failure(std::exception_ptr failure,
+                                                const char *phase) noexcept {
+  if (!failure)
+    return;
+  // Outer catch-all: this is the last step of a teardown that must not throw, and
+  // the reporting path itself formats and allocates.
+  try {
+    try {
+      std::rethrow_exception(failure);
+    } catch (const std::exception &e) {
+      util::Logger::warn("SimulationEngine: a component shutdown() threw during ", phase, ": ",
+                         e.what());
+    } catch (...) {
+      util::Logger::warn("SimulationEngine: a component shutdown() threw a non-standard exception "
+                         "during ",
+                         phase);
+    }
+  } catch (...) {
+    // Reporting itself failed; nothing further here is safe or useful.
+  }
+}
+
+bool SimulationEngine::wait_until_started() const {
+  while (!startup_complete_.load(std::memory_order_acquire))
+    startup_complete_.wait(false, std::memory_order_acquire);
+  return !startup_failed_.load(std::memory_order_acquire);
+}
+
 bool SimulationEngine::step() {
   assert(created_ && "step() called before create()");
   assert(config_.num_threads == 1 && "step() requires single-threaded mode");
 
   if (!running_) {
-    startup_components();
+    // A prior startup() throw made this generation terminal (see run()): its
+    // partial event/primary/component state is still live, so re-running startup
+    // would double-schedule events and double-register primaries. Report done;
+    // the caller must shutdown() + create() to retry.
+    if (startup_failed())
+      return false;
+    // step() runs on the foreground caller, so a startup throw propagates to it
+    // (rethrown below) after fail_startup() records the same terminal ExitStatus
+    // run() would, publishes it to wait_until_started() waiters, and unwinds.
+    try {
+      startup_components();
+    } catch (const std::exception &e) {
+      fail_startup(std::string("component startup failed: ") + e.what());
+      throw;
+    } catch (...) {
+      fail_startup("component startup failed with a non-standard exception");
+      throw;
+    }
     running_ = true;
+    latch_startup(/*failed=*/false);
 
     if (config_.max_ticks > 0) {
       max_ticks_event_.set_handler([this](Tick ts, Message *) {
@@ -571,11 +674,40 @@ void SimulationEngine::startup_components() {
   }
 }
 
-void SimulationEngine::shutdown_components() {
-  for (auto &part : topology_.partitions()) {
-    for (auto *comp : part.components)
-      comp->shutdown();
+std::exception_ptr SimulationEngine::shutdown_components() noexcept {
+  // shutdown() pairs with initialize() (both run over every component), so it must
+  // shut down every INITIALIZED component in reverse topology order — not only the
+  // ones whose startup() ran. create() initializes all components, so a
+  // create(); shutdown() with no run()/step() still releases their resources, and a
+  // partial-startup unwind still cleans up every initialized component. Guarded so
+  // it runs exactly once per create() generation: both the startup-failure unwind
+  // and the later engine shutdown() reach here, and a component must not be shut
+  // down twice. Reset by create().
+  if (components_shut_down_)
+    return {};
+  components_shut_down_ = true;
+
+  // Iterate in place rather than building a temporary vector: this runs on the
+  // teardown path reached from ~SimulationEngine(), so a bad_alloc from that
+  // temporary would skip EVERY component's cleanup and escape a noexcept
+  // destructor. Reverse partition order, reverse component order within each.
+  //
+  // Each callback is isolated: Component::shutdown() is not noexcept, and the
+  // generation is already marked shut down above, so letting one throw would
+  // permanently skip cleanup for the components after it with no way to retry.
+  std::exception_ptr first_failure;
+  auto &partitions = topology_.partitions();
+  for (auto part = partitions.rbegin(); part != partitions.rend(); ++part) {
+    for (auto comp = part->components.rbegin(); comp != part->components.rend(); ++comp) {
+      try {
+        (*comp)->shutdown();
+      } catch (...) {
+        if (!first_failure)
+          first_failure = std::current_exception();
+      }
+    }
   }
+  return first_failure;
 }
 
 Tick SimulationEngine::compute_async_floor(const PartitionContext &ctx) const {

@@ -31,6 +31,7 @@ RJ_DIAGNOSTIC_POP
 #include <array>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
@@ -634,6 +635,9 @@ TEST_F(SimulatedKfdTest, GuestOpenSurvivesExecutionPrimaryOverwrite) {
 
   const int reopened_fd = guest.open();
   ASSERT_GE(reopened_fd, 0);
+  // Each open() yields a DISTINCT descriptor, as real KFD does -- duplicated from
+  // the synthetic backing, never from a real device.
+  EXPECT_NE(reopened_fd, app_fd);
   EXPECT_EQ(execution_driver->local_open_ref_count(), 1u)
       << "re-minting the simulator primary must not leak another backend open";
   EXPECT_EQ(execution_driver->local_process_id(), process_id);
@@ -659,6 +663,182 @@ TEST_F(SimulatedKfdTest, TopologyDirectoryExists) {
   EXPECT_TRUE(std::filesystem::exists(path + "/generation_id"));
   EXPECT_TRUE(std::filesystem::exists(path + "/nodes/0/properties"));
   EXPECT_TRUE(std::filesystem::exists(path + "/nodes/1/properties"));
+}
+
+// begin_local_shutdown() releases parked waiters so their callers drop the driver
+// snapshot that keeps the object alive. It must do ONLY that: an earlier version
+// also marked the driver closing and poisoned every event-page slot with
+// KFD_SIGNAL_EVENT_LIMIT, which turned a live consumer's ioctls into -EBADF and
+// destroyed the ages it was polling. This asserts the wake disturbs neither the
+// page nor the closing flag, so a driver that survives it keeps serving.
+TEST_F(SimulatedKfdTest, BeginLocalShutdownLeavesSignaledEventPageIntact) {
+  auto t = create_test_vm();
+  ASSERT_NE(t.driver(), nullptr);
+  auto *drv = t.driver();
+
+  ASSERT_GE(drv->open(), 0);
+  auto proc = drv->find_process(drv->local_process_id());
+  ASSERT_NE(proc, nullptr);
+
+  // Provide a real event page and adopt it, mirroring the CREATE_EVENT mmap path.
+  constexpr size_t kSlots = 64;
+  std::vector<uint64_t> page(kSlots, 0);
+  proc->event_state_.adopt_page(page.data(), page.size() * sizeof(uint64_t));
+
+  // Create a signal event and signal it, so its page slot holds a real (non-zero,
+  // non-sentinel) age.
+  kfd_ioctl_create_event_args create{};
+  create.event_type = 0; // signal event
+  ASSERT_EQ(drv->ioctl(AMDKFD_IOC_CREATE_EVENT, &create), 0);
+
+  kfd_ioctl_set_event_args set{};
+  set.event_id = create.event_id;
+  ASSERT_EQ(drv->ioctl(AMDKFD_IOC_SET_EVENT, &set), 0);
+
+  const uint64_t signaled_age = page[create.event_id];
+  ASSERT_NE(signaled_age, 0u);
+  ASSERT_NE(signaled_age, static_cast<uint64_t>(KFD_SIGNAL_EVENT_LIMIT));
+
+  drv->begin_local_shutdown();
+  EXPECT_EQ(page[create.event_id], signaled_age)
+      << "begin_local_shutdown must not disturb the event page";
+  EXPECT_FALSE(proc->event_state_.is_closing())
+      << "begin_local_shutdown must not mark the driver closing: that turns a live "
+         "consumer's ioctls into -EBADF/-ESRCH and cannot be undone faithfully";
+
+  // A wait issued after the wake is released rather than failed: it reports a
+  // benign timeout (rc 0), never -EBADF. That distinction is why the wake must not
+  // set closing_ — an in-flight caller must be able to unwind normally while
+  // teardown drains, and -EBADF is not a legal answer from a still-published driver.
+  kfd_event_data ev{};
+  ev.event_id = create.event_id;
+  kfd_ioctl_wait_events_args wait{};
+  wait.events_ptr = reinterpret_cast<uint64_t>(&ev);
+  wait.num_events = 1;
+  wait.wait_for_all = 1;
+  wait.timeout = 0;
+  EXPECT_EQ(drv->ioctl(AMDKFD_IOC_WAIT_EVENTS, &wait), 0)
+      << "a wait after the wake must not fail the caller";
+
+  EXPECT_EQ(drv->close(), 0);
+}
+
+// An AUTO-RESET event that was signaled while a waiter was parked is the state the
+// old speculative-shutdown design lost: signaling advances and publishes the age but
+// deliberately leaves signaled == false, so a rollback that rebuilt the page from
+// `signaled` events alone replaced a real pending completion with the unsignaled
+// sentinel. The wake must therefore leave the page alone even in this state. There is
+// no rollback any more, but the property is what makes that safe, so pin it.
+TEST_F(SimulatedKfdTest, WakeDoesNotDisturbPendingAutoResetEventPage) {
+  auto t = create_test_vm();
+  ASSERT_NE(t.driver(), nullptr);
+  auto *drv = t.driver();
+  ASSERT_GE(drv->open(), 0);
+  auto proc = drv->find_process(drv->local_process_id());
+  ASSERT_NE(proc, nullptr);
+
+  constexpr size_t kSlots = 64;
+  std::vector<uint64_t> page(kSlots, 0);
+  proc->event_state_.adopt_page(page.data(), page.size() * sizeof(uint64_t));
+
+  kfd_ioctl_create_event_args create{};
+  create.event_type = 0;
+  create.auto_reset = 1;
+  ASSERT_EQ(drv->ioctl(AMDKFD_IOC_CREATE_EVENT, &create), 0);
+
+  // Register a waiter deterministically: poll the event's waiter count rather than
+  // sleeping, so the SET_EVENT below is guaranteed to take the "waiters present"
+  // auto-reset path (which advances and publishes the age while deliberately
+  // leaving signaled == false).
+  std::atomic<int> wait_rc{-1};
+  std::atomic<uint32_t> wait_result{0};
+  std::thread waiter([&] {
+    kfd_event_data ev{};
+    ev.event_id = create.event_id;
+    kfd_ioctl_wait_events_args wait{};
+    wait.events_ptr = reinterpret_cast<uint64_t>(&ev);
+    wait.num_events = 1;
+    wait.wait_for_all = 1;
+    wait.timeout = 0xFFFFFFFFu;
+    wait_rc.store(drv->ioctl(AMDKFD_IOC_WAIT_EVENTS, &wait), std::memory_order_release);
+    wait_result.store(wait.wait_result, std::memory_order_release);
+  });
+  while (proc->event_state_.waiter_count(create.event_id) == 0)
+    std::this_thread::yield();
+
+  kfd_ioctl_set_event_args set{};
+  set.event_id = create.event_id;
+  ASSERT_EQ(drv->ioctl(AMDKFD_IOC_SET_EVENT, &set), 0);
+  const uint64_t pending_age =
+      std::atomic_ref<uint64_t>(page[create.event_id]).load(std::memory_order_acquire);
+  ASSERT_NE(pending_age, 0u);
+  ASSERT_NE(pending_age, static_cast<uint64_t>(KFD_SIGNAL_EVENT_LIMIT));
+
+  drv->begin_local_shutdown();
+  waiter.join();
+
+  // The slot is written with atomic_ref by the driver, so read it the same way.
+  EXPECT_EQ(std::atomic_ref<uint64_t>(page[create.event_id]).load(std::memory_order_acquire),
+            pending_age)
+      << "the wake must not overwrite a pending auto-reset completion whose event is "
+         "not flagged signaled; that is the lost signal the old page rollback caused";
+  EXPECT_EQ(wait_rc.load(std::memory_order_acquire), 0)
+      << "the released waiter must not fail its caller";
+
+  EXPECT_EQ(drv->close(), 0);
+}
+
+// The wake exists to release an INDEFINITE WAIT_EVENTS so its caller drops the
+// driver snapshot that would otherwise keep the object alive forever. Assert that
+// directly: a thread parked with an infinite timeout must be released, and it must
+// come back as a benign timeout (rc 0) rather than -EBADF, which is not a legal
+// answer for a driver that is still serving.
+TEST_F(SimulatedKfdTest, BeginLocalShutdownReleasesIndefiniteWaitAsTimeout) {
+  auto t = create_test_vm();
+  ASSERT_NE(t.driver(), nullptr);
+  auto *drv = t.driver();
+
+  ASSERT_GE(drv->open(), 0);
+  auto proc = drv->find_process(drv->local_process_id());
+  ASSERT_NE(proc, nullptr);
+
+  constexpr size_t kSlots = 64;
+  std::vector<uint64_t> page(kSlots, 0);
+  proc->event_state_.adopt_page(page.data(), page.size() * sizeof(uint64_t));
+
+  kfd_ioctl_create_event_args create{};
+  create.event_type = 0;
+  ASSERT_EQ(drv->ioctl(AMDKFD_IOC_CREATE_EVENT, &create), 0);
+
+  std::atomic<bool> parked{false};
+  int wait_rc = -1;
+  uint32_t wait_result = 0;
+  std::thread waiter([&] {
+    kfd_event_data ev{};
+    ev.event_id = create.event_id;
+    kfd_ioctl_wait_events_args wait{};
+    wait.events_ptr = reinterpret_cast<uint64_t>(&ev);
+    wait.num_events = 1;
+    wait.wait_for_all = 1;
+    wait.timeout = 0xFFFFFFFFu; // indefinite
+    parked.store(true, std::memory_order_release);
+    wait_rc = drv->ioctl(AMDKFD_IOC_WAIT_EVENTS, &wait);
+    wait_result = wait.wait_result;
+  });
+
+  while (!parked.load(std::memory_order_acquire))
+    std::this_thread::yield();
+  // Give the waiter a moment to actually park inside the condition variable.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  drv->begin_local_shutdown();
+  waiter.join();
+
+  EXPECT_EQ(wait_rc, 0) << "a cancelled wait must not fail the caller's ioctl";
+  EXPECT_EQ(wait_result, static_cast<uint32_t>(KFD_IOC_WAIT_RESULT_TIMEOUT))
+      << "a cancelled wait must report a benign timeout, not a completion";
+
+  EXPECT_EQ(drv->close(), 0);
 }
 
 // Regression test for the close()-vs-in-flight-ioctl teardown race. ioctl()
@@ -731,6 +911,120 @@ TEST_F(SimulatedKfdTest, ConcurrentIoctlAndCloseIsRaceFree) {
       w.join();
     EXPECT_EQ(bad.load(), 0) << "round " << round << ": ioctl saw invalid state during close";
   }
+}
+
+// GuestKfd's hardware path cannot wake a blocking kernel WAIT_EVENTS, so it forwards
+// the wait as short, cancellable polls instead. That loop is the contract the
+// interposer's phase-2 teardown wake depends on for a hardware-backed guest, but
+// reaching it through GuestKfd::ioctl() needs a real /dev/kfd. These drive the
+// algorithm directly with an injected poll, covering all four of its outcomes.
+
+// A zero-timeout poll is already prompt, so it must be forwarded verbatim: exactly
+// one poll, with the caller's timeout untouched (no kPollMs slice substituted).
+TEST(GuestKfdWaitPollLoopTest, ZeroTimeoutForwardsUnchanged) {
+  std::atomic<bool> cancelled{false};
+  kfd_ioctl_wait_events_args args{};
+  args.timeout = 0;
+
+  int polls = 0;
+  uint32_t observed_timeout = 0xDEADBEEF;
+  int rc = rocjitsu::GuestKfdTestAccess::wait_events_poll_loop(args, cancelled, [&] {
+    ++polls;
+    observed_timeout = args.timeout;
+    args.wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+    return 0;
+  });
+
+  EXPECT_EQ(rc, 0);
+  EXPECT_EQ(polls, 1) << "a zero-timeout poll must not be split into slices";
+  EXPECT_EQ(observed_timeout, 0u) << "a zero-timeout poll must be forwarded verbatim";
+  EXPECT_EQ(args.timeout, 0u);
+}
+
+// Cancellation (begin_local_shutdown) must end the loop with a benign timeout and
+// restore the caller's original timeout field, since teardown may still be aborted
+// and the caller has to be free to re-issue the same request.
+TEST(GuestKfdWaitPollLoopTest, CancellationReportsTimeoutAndRestoresTheTimeout) {
+  std::atomic<bool> cancelled{false};
+  kfd_ioctl_wait_events_args args{};
+  args.timeout = 0xFFFFFFFFu; // indefinite
+  args.wait_result = KFD_IOC_WAIT_RESULT_COMPLETE;
+
+  int polls = 0;
+  int rc = rocjitsu::GuestKfdTestAccess::wait_events_poll_loop(args, cancelled, [&] {
+    ++polls;
+    EXPECT_NE(args.timeout, 0xFFFFFFFFu) << "each kernel poll must use the short slice";
+    cancelled.store(true, std::memory_order_release);
+    args.wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+    return 0;
+  });
+
+  EXPECT_EQ(rc, 0) << "cancellation must not fail the caller's ioctl";
+  EXPECT_EQ(args.wait_result, static_cast<uint32_t>(KFD_IOC_WAIT_RESULT_TIMEOUT));
+  EXPECT_EQ(args.timeout, 0xFFFFFFFFu) << "the caller's timeout must be restored";
+  EXPECT_EQ(polls, 1);
+}
+
+// An indefinite wait must keep polling across timeouts and return as soon as an
+// event completes, never expiring on its own.
+TEST(GuestKfdWaitPollLoopTest, IndefiniteWaitPollsUntilCompletion) {
+  std::atomic<bool> cancelled{false};
+  kfd_ioctl_wait_events_args args{};
+  args.timeout = 0xFFFFFFFFu;
+
+  int polls = 0;
+  int rc = rocjitsu::GuestKfdTestAccess::wait_events_poll_loop(args, cancelled, [&] {
+    ++polls;
+    args.wait_result = (polls < 4) ? KFD_IOC_WAIT_RESULT_TIMEOUT : KFD_IOC_WAIT_RESULT_COMPLETE;
+    return 0;
+  });
+
+  EXPECT_EQ(rc, 0);
+  EXPECT_EQ(polls, 4) << "an indefinite wait must re-poll until an event completes";
+  EXPECT_EQ(args.wait_result, static_cast<uint32_t>(KFD_IOC_WAIT_RESULT_COMPLETE));
+  EXPECT_EQ(args.timeout, 0xFFFFFFFFu);
+}
+
+// A finite wait whose events never fire must expire on its own deadline (not spin
+// forever), reporting the caller-visible timeout and restoring the timeout field.
+TEST(GuestKfdWaitPollLoopTest, FiniteDeadlineExpiresWithTimeout) {
+  std::atomic<bool> cancelled{false};
+  kfd_ioctl_wait_events_args args{};
+  args.timeout = 20; // ms
+
+  int polls = 0;
+  const auto started = std::chrono::steady_clock::now();
+  int rc = rocjitsu::GuestKfdTestAccess::wait_events_poll_loop(args, cancelled, [&] {
+    ++polls;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    args.wait_result = KFD_IOC_WAIT_RESULT_TIMEOUT;
+    return 0;
+  });
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+
+  EXPECT_EQ(rc, 0);
+  EXPECT_EQ(args.wait_result, static_cast<uint32_t>(KFD_IOC_WAIT_RESULT_TIMEOUT));
+  EXPECT_EQ(args.timeout, 20u) << "the caller's timeout must be restored";
+  EXPECT_GE(polls, 1);
+  EXPECT_GE(elapsed, std::chrono::milliseconds(20)) << "must not return before its deadline";
+}
+
+// A failing kernel poll must propagate immediately, with the caller's timeout
+// restored so the returned args are not left holding the internal slice value.
+TEST(GuestKfdWaitPollLoopTest, PollFailurePropagatesWithTheTimeoutRestored) {
+  std::atomic<bool> cancelled{false};
+  kfd_ioctl_wait_events_args args{};
+  args.timeout = 0xFFFFFFFFu;
+
+  int polls = 0;
+  int rc = rocjitsu::GuestKfdTestAccess::wait_events_poll_loop(args, cancelled, [&] {
+    ++polls;
+    return -1;
+  });
+
+  EXPECT_EQ(rc, -1);
+  EXPECT_EQ(polls, 1);
+  EXPECT_EQ(args.timeout, 0xFFFFFFFFu);
 }
 
 } // namespace
