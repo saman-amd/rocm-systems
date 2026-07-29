@@ -15,7 +15,7 @@
 
 namespace rocprofsys::control::triggers
 {
-template <typename Clock>
+template <clock_policy Clock>
 class time_window
 {
 public:
@@ -58,6 +58,7 @@ public:
         {
             return;
         }
+        m_clock.reset();
         m_thread = std::thread{ [this]() { worker(); } };
     }
 
