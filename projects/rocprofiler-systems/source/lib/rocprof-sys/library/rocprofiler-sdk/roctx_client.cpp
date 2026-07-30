@@ -115,7 +115,6 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_enter(
 {
     auto* data =
         static_cast<rocprofiler_callback_tracing_marker_api_data_t*>(record.payload);
-    const bool write_enabled = m_trigger->should_write_markers();
 
     switch(record.operation)
     {
@@ -125,7 +124,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_enter(
             const std::uint64_t range_id =
                 s_push_range_id.fetch_sub(1, std::memory_order_relaxed);
             m_trigger->on_range_start(range_id, name);
-            const bool pushed_write_enabled = m_trigger->should_write_markers();
+            const bool pushed_write_enabled = should_write();
             m_pushed_ranges.push_back(
                 { tim::add_hash_id(name), ts, pushed_write_enabled, range_id });
             if(pushed_write_enabled)
@@ -143,7 +142,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_enter(
         {
             const char* name = data->args.roctxMarkA.message;
             tim::add_hash_id(name);
-            if(write_enabled)
+            if(should_write())
             {
                 m_writer.write_begin(name);
             }
@@ -151,7 +150,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_enter(
         }
         default:
         {
-            if(write_enabled)
+            if(should_write())
             {
                 const auto& name =
                     trace_cache::get_metadata_registry().get_callback_tracing_info().at(
@@ -218,7 +217,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_exit(
         }
         case ROCPROFILER_MARKER_CORE_API_ID_roctxMarkA:
         {
-            if(m_trigger->should_write_markers())
+            if(should_write())
             {
                 m_writer.write_end(data->args.roctxMarkA.message, begin_ts, ts, args_str,
                                    record);
@@ -236,7 +235,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_exit(
 
             m_trigger->on_range_start(range_id, name);
 
-            const bool write_enabled = m_trigger->should_write_markers();
+            const bool write_enabled = should_write();
             m_started_ranges.push_back(
                 { tim::get_hash_id(name), begin_ts, write_enabled });
             if(write_enabled)
@@ -247,7 +246,7 @@ roctx_client<MarkerWriterPolicy>::handle_marker_core_exit(
         }
         default:
         {
-            if(m_trigger->should_write_markers())
+            if(should_write())
             {
                 const auto& name =
                     trace_cache::get_metadata_registry().get_callback_tracing_info().at(
