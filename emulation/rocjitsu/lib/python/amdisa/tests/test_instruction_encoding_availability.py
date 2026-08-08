@@ -51,6 +51,24 @@ def test_rdna4_distinguishes_vop1_instructions_with_and_without_dpp():
     assert generator._instruction_supports_dpp8(narrow, 'ENC_VOP1')
 
 
+def test_rdna4_dpp_predicate_filters_opcodes_without_alternates():
+    spec = Parser(str(_mrisa_dir() / 'amdgpu_isa_rdna4.xml'), Rdna4Profile()).parse()
+    encoding = spec.encoding_map['ENC_VOP3']
+    generator = CodeGenerator(spec, '')
+
+    opcodes = generator._encoded_dpp_opcodes(encoding, 'dpp8')
+    helper = generator._opcode_predicate_helper_impl(
+        encoding,
+        'has_encoded_dpp8',
+        list(opcodes),
+        'amdgpu::dpp::is_src_dpp8(inst_.src0)',
+    )
+
+    assert 384 not in opcodes  # V_NOP
+    assert 385 in opcodes  # V_MOV_B32
+    assert 'amdgpu::dpp::is_src_dpp8(inst_.src0)' in helper
+
+
 def test_cdna4_distinguishes_vop1_instructions_with_and_without_sdwa():
     spec = Parser(str(_mrisa_dir() / 'amdgpu_isa_cdna4.xml'), Cdna4Profile()).parse()
     supported = _find_instruction(spec, 'ENC_VOP1', 'V_MOV_B32')

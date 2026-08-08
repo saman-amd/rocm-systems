@@ -273,6 +273,82 @@ void Smem::build_modifiers(std::string &out) const {
     out += " nv";
 }
 
+bool Vop1::has_encoded_dpp() const {
+  if (!(inst_.src0 == amdgpu::SRC_DPP))
+    return false;
+  switch (inst_.op) {
+  case 0:
+  case 1:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 27:
+  case 28:
+  case 29:
+  case 30:
+  case 31:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 39:
+  case 41:
+  case 42:
+  case 43:
+  case 44:
+  case 45:
+  case 46:
+  case 47:
+  case 51:
+  case 52:
+  case 55:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+  case 62:
+  case 63:
+  case 64:
+  case 65:
+  case 66:
+  case 67:
+  case 68:
+  case 69:
+  case 70:
+  case 71:
+  case 72:
+  case 73:
+  case 74:
+  case 77:
+  case 78:
+  case 79:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void Vop1::append_mnemonic(std::string &out) const {
+  if (!(has_encoded_dpp()) || !mnemonic_.ends_with("_e32")) {
+    out += mnemonic_;
+    return;
+  }
+  out.append(mnemonic_.data(), mnemonic_.size() - 4);
+  out += "_dpp";
+}
+
 bool Vop1::has_encoded_literal32() const {
   switch (inst_.op) {
   case 1:
@@ -426,7 +502,7 @@ Vop1::Vop1(std::string_view mnemonic, const Vop1MachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || has_encoded_sdwa() || has_encoded_literal32())
+  if (has_encoded_dpp() || has_encoded_sdwa() || has_encoded_literal32())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
@@ -466,6 +542,10 @@ void Vop1::build_modifiers(std::string &out) const {
     amdgpu::sdwa::append_destination_attributes(out, sdwa_clamp_, sdwa_omod_, sdwa_dst_sel_,
                                                 sdwa_dst_unused_, sdwa_src0_sel_,
                                                 sdwa_src1_operand_, sdwa_src1_sel_);
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, false,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx9);
 }
 
 bool Vop1::default_encoding() {
@@ -832,7 +912,7 @@ Vopc::Vopc(std::string_view mnemonic, const VopcMachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || has_encoded_sdwa() || has_encoded_literal32())
+  if (has_encoded_sdwa() || has_encoded_literal32())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
@@ -865,6 +945,83 @@ bool Vopc::default_encoding() {
 bool Vopc::has_lit() { return inst_.src0 == 255; }
 
 bool Vopc::has_sdwa() { return inst_.src0 == 249; }
+
+bool Vop2::has_encoded_dpp() const {
+  if (!(inst_.src0 == amdgpu::SRC_DPP))
+    return false;
+  switch (inst_.op) {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+  case 16:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 21:
+  case 22:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 29:
+  case 30:
+  case 31:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 38:
+  case 39:
+  case 40:
+  case 41:
+  case 42:
+  case 43:
+  case 44:
+  case 45:
+  case 46:
+  case 47:
+  case 48:
+  case 49:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 55:
+  case 56:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void Vop2::append_mnemonic(std::string &out) const {
+  if (!(has_encoded_dpp()) || !mnemonic_.ends_with("_e32")) {
+    out += mnemonic_;
+    return;
+  }
+  out.append(mnemonic_.data(), mnemonic_.size() - 4);
+  out += "_dpp";
+}
 
 bool Vop2::has_encoded_literal32() const {
   switch (inst_.op) {
@@ -1003,8 +1160,7 @@ Vop2::Vop2(std::string_view mnemonic, const Vop2MachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || has_encoded_sdwa() || has_encoded_literal32() ||
-      hasImpliedLiteral())
+  if (has_encoded_dpp() || has_encoded_sdwa() || has_encoded_literal32() || hasImpliedLiteral())
     size_ += sizeof(MachineInst);
   if (hasImpliedLiteral())
     literal_ = reinterpret_cast<const uint32_t *>(inst)[1];
@@ -1046,6 +1202,10 @@ void Vop2::build_modifiers(std::string &out) const {
     amdgpu::sdwa::append_destination_attributes(out, sdwa_clamp_, sdwa_omod_, sdwa_dst_sel_,
                                                 sdwa_dst_unused_, sdwa_src0_sel_,
                                                 sdwa_src1_operand_, sdwa_src1_sel_);
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, false,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx9);
 }
 
 bool Vop2::default_encoding() {
@@ -1074,6 +1234,30 @@ Vintrp::Vintrp(std::string_view mnemonic, const VintrpMachineInst *inst, Execute
 
 bool Vintrp::default_encoding() { return true; }
 
+uint32_t Vop3p::vop3p_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
+}
+
+bool Vop3p::omits_vop3p_source_modifiers() const {
+  switch (inst_.op) {
+  case 88:
+  case 89:
+    return true;
+  default:
+    return false;
+  }
+}
+
 Vop3p::Vop3p(std::string_view mnemonic, const Vop3pMachineInst *inst, ExecuteFn exec_fn)
     : IsaInstruction<Isa>(mnemonic, exec_fn), inst_(*inst) {
   size_ = sizeof(OpEncoding);
@@ -1082,12 +1266,227 @@ Vop3p::Vop3p(std::string_view mnemonic, const Vop3pMachineInst *inst, ExecuteFn 
   opcode_ = inst_.op;
 }
 
+void Vop3p::build_modifiers(std::string &out) const {
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3p_disassembly(
+      out, inst->op_sel, inst->op_sel_hi | (inst->op_sel_hi_2 << 2), inst->neg, inst->neg_hi,
+      inst->clamp, omits_vop3p_source_modifiers() ? 0 : vop3p_encoded_source_count(),
+      (inst_.op >= 0 && inst_.op <= 18));
+}
+
+bool Vop3::displays_vop3_op_sel() const {
+  switch (inst_.op) {
+  case 20:
+  case 21:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+  case 38:
+  case 39:
+  case 40:
+  case 41:
+  case 42:
+  case 43:
+  case 44:
+  case 45:
+  case 46:
+  case 47:
+  case 48:
+  case 49:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 55:
+  case 56:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+  case 62:
+  case 63:
+  case 160:
+  case 161:
+  case 162:
+  case 163:
+  case 164:
+  case 165:
+  case 166:
+  case 167:
+  case 168:
+  case 169:
+  case 170:
+  case 171:
+  case 172:
+  case 173:
+  case 174:
+  case 175:
+  case 176:
+  case 177:
+  case 178:
+  case 179:
+  case 180:
+  case 181:
+  case 182:
+  case 183:
+  case 184:
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 191:
+  case 287:
+  case 288:
+  case 289:
+  case 290:
+  case 291:
+  case 294:
+  case 295:
+  case 296:
+  case 297:
+  case 298:
+  case 299:
+  case 300:
+  case 301:
+  case 302:
+  case 303:
+  case 304:
+  case 305:
+  case 306:
+  case 307:
+  case 330:
+  case 331:
+  case 377:
+  case 378:
+  case 379:
+  case 380:
+  case 381:
+  case 382:
+  case 383:
+  case 384:
+  case 385:
+  case 386:
+  case 387:
+  case 388:
+  case 389:
+  case 390:
+  case 391:
+  case 392:
+  case 393:
+  case 394:
+  case 397:
+  case 398:
+  case 399:
+  case 490:
+  case 491:
+  case 492:
+  case 494:
+  case 495:
+  case 497:
+  case 498:
+  case 500:
+  case 501:
+  case 502:
+  case 503:
+  case 504:
+  case 505:
+  case 506:
+  case 507:
+  case 508:
+  case 515:
+  case 516:
+  case 517:
+  case 518:
+  case 519:
+  case 665:
+  case 666:
+  case 670:
+  case 671:
+  case 672:
+    return true;
+  default:
+    return false;
+  }
+}
+
+uint32_t Vop3::vop3_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
+}
+
+int32_t Vop3::vop3_encoded_source_index(uint8_t operand_index) const {
+  int32_t encoded_index = 0;
+  for (uint8_t src = 0; src <= operand_index; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (repeats_dst) {
+      if (src == operand_index)
+        return -1;
+      continue;
+    }
+    if (src == operand_index)
+      return encoded_index;
+    ++encoded_index;
+  }
+  return -1;
+}
+
 Vop3::Vop3(std::string_view mnemonic, const Vop3MachineInst *inst, ExecuteFn exec_fn)
     : IsaInstruction<Isa>(mnemonic, exec_fn), inst_(*inst) {
   size_ = sizeof(OpEncoding);
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
+}
+
+void Vop3::build_modifiers(std::string &out) const {
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3_disassembly(out, inst->op_sel, inst->clamp, inst->omod,
+                                       vop3_encoded_source_count(), displays_vop3_op_sel());
+}
+
+void Vop3::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  const int32_t modifier_index = vop3_encoded_source_index(operand_index);
+  const auto reg = operand->to_register_ref();
+  const bool half_width = modifier_index >= 0 && false && operand->size_bits() == 16 && reg &&
+                          reg->cls == RegClass::VGPR;
+  if (modifier_index < 0) {
+    out += operand->name();
+    return;
+  }
+  amdgpu::vop::append_vop3_operand(out, operand->name(), (inst_.abs >> modifier_index) & 1,
+                                   (inst_.neg >> modifier_index) & 1, half_width,
+                                   (inst_.op_sel >> modifier_index) & 1);
+}
+
+void Vop3::append_dst_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = dst_operands_[operand_index];
+  const auto reg = operand->to_register_ref();
+  const bool half_width = false && operand->size_bits() == 16 && reg && reg->cls == RegClass::VGPR;
+  amdgpu::vop::append_vop3_operand(out, operand->name(), false, false, half_width,
+                                   (inst_.op_sel >> 3) & 1);
 }
 
 bool Ds::uses_split_ds_offsets() const {
@@ -1228,6 +1627,40 @@ void Flat::implicit_uses(RegisterSet &uses) const {
   }
 }
 
+uint32_t Vop3SdstEnc::vop3_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
+}
+
+int32_t Vop3SdstEnc::vop3_encoded_source_index(uint8_t operand_index) const {
+  int32_t encoded_index = 0;
+  for (uint8_t src = 0; src <= operand_index; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (repeats_dst) {
+      if (src == operand_index)
+        return -1;
+      continue;
+    }
+    if (src == operand_index)
+      return encoded_index;
+    ++encoded_index;
+  }
+  return -1;
+}
+
 Vop3SdstEnc::Vop3SdstEnc(std::string_view mnemonic, const Vop3SdstEncMachineInst *inst,
                          ExecuteFn exec_fn)
     : IsaInstruction<Isa>(mnemonic, exec_fn), inst_(*inst) {
@@ -1235,6 +1668,35 @@ Vop3SdstEnc::Vop3SdstEnc(std::string_view mnemonic, const Vop3SdstEncMachineInst
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
+}
+
+void Vop3SdstEnc::build_modifiers(std::string &out) const {
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3_disassembly(out, 0, inst->clamp, inst->omod, vop3_encoded_source_count(),
+                                       false);
+}
+
+void Vop3SdstEnc::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  const int32_t modifier_index = vop3_encoded_source_index(operand_index);
+  const auto reg = operand->to_register_ref();
+  const bool half_width = modifier_index >= 0 && false && operand->size_bits() == 16 && reg &&
+                          reg->cls == RegClass::VGPR;
+  if (modifier_index < 0) {
+    out += operand->name();
+    return;
+  }
+  amdgpu::vop::append_vop3_operand(out, operand->name(), (0 >> modifier_index) & 1,
+                                   (inst_.neg >> modifier_index) & 1, half_width,
+                                   (0 >> modifier_index) & 1);
+}
+
+void Vop3SdstEnc::append_dst_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = dst_operands_[operand_index];
+  const auto reg = operand->to_register_ref();
+  const bool half_width = false && operand->size_bits() == 16 && reg && reg->cls == RegClass::VGPR;
+  amdgpu::vop::append_vop3_operand(out, operand->name(), false, false, half_width, (0 >> 3) & 1);
 }
 
 Vop3pMfma::Vop3pMfma(std::string_view mnemonic, const Vop3pMfmaMachineInst *inst, ExecuteFn exec_fn)

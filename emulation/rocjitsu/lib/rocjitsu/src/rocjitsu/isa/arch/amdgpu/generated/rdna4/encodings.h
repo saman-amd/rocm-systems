@@ -439,6 +439,10 @@ public:
 class Vop1 : public IsaInstruction<Isa> {
 public:
   Vop1(std::string_view mnemonic, const Vop1MachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
   bool has_encoded_literal32() const;
   void build_modifiers(std::string &out) const override;
   void implicit_uses(RegisterSet &uses) const override;
@@ -469,6 +473,10 @@ public:
 class Vopc : public IsaInstruction<Isa> {
 public:
   Vopc(std::string_view mnemonic, const VopcMachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
   bool has_encoded_literal32() const;
   void build_modifiers(std::string &out) const override;
   bool default_encoding();
@@ -497,6 +505,10 @@ public:
 class Vop2 : public IsaInstruction<Isa> {
 public:
   Vop2(std::string_view mnemonic, const Vop2MachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
   bool has_encoded_literal32() const;
   void build_modifiers(std::string &out) const override;
   void implicit_uses(RegisterSet &uses) const override;
@@ -529,6 +541,13 @@ public:
 class Vop3 : public IsaInstruction<Isa> {
 public:
   Vop3(std::string_view mnemonic, const Vop3MachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
+  bool displays_vop3_op_sel() const;
+  uint32_t vop3_encoded_source_count() const;
+  int32_t vop3_encoded_source_index(uint8_t operand_index) const;
   bool has_encoded_literal32() const;
   static Result validate_encoding([[maybe_unused]] std::string_view mnemonic,
                                   const Vop3MachineInst *inst,
@@ -541,6 +560,8 @@ public:
   }
   void build_modifiers(std::string &out) const override;
   void implicit_uses(RegisterSet &uses) const override;
+  void append_src_operand(std::string &out, uint8_t operand_index) const override;
+  void append_dst_operand(std::string &out, uint8_t operand_index) const override;
   bool has_lit_0();
   bool has_lit_1();
   bool has_lit_0_has_lit_1();
@@ -562,6 +583,11 @@ public:
 class Vop3p : public IsaInstruction<Isa> {
 public:
   Vop3p(std::string_view mnemonic, const Vop3pMachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
+  uint32_t vop3p_encoded_source_count() const;
   bool has_encoded_literal32() const;
   static Result validate_encoding([[maybe_unused]] std::string_view mnemonic,
                                   const Vop3pMachineInst *inst,
@@ -625,6 +651,7 @@ public:
 class Vimage : public IsaInstruction<Isa> {
 public:
   Vimage(std::string_view mnemonic, const VimageMachineInst *inst, ExecuteFn exec_fn);
+  void build_modifiers(std::string &out) const override;
   using OpEncoding = VimageMachineInst;
   const OpEncoding inst_;
 };
@@ -632,6 +659,7 @@ public:
 class Vsample : public IsaInstruction<Isa> {
 public:
   Vsample(std::string_view mnemonic, const VsampleMachineInst *inst, ExecuteFn exec_fn);
+  void build_modifiers(std::string &out) const override;
   using OpEncoding = VsampleMachineInst;
   const OpEncoding inst_;
 };
@@ -670,6 +698,12 @@ public:
 class Vop3SdstEnc : public IsaInstruction<Isa> {
 public:
   Vop3SdstEnc(std::string_view mnemonic, const Vop3SdstEncMachineInst *inst, ExecuteFn exec_fn);
+  bool supports_dpp_opcode() const;
+  bool has_encoded_dpp() const;
+  bool has_encoded_dpp8() const;
+  void append_mnemonic(std::string &out) const override;
+  uint32_t vop3_encoded_source_count() const;
+  int32_t vop3_encoded_source_index(uint8_t operand_index) const;
   bool has_encoded_literal32() const;
   static Result validate_encoding([[maybe_unused]] std::string_view mnemonic,
                                   const Vop3SdstEncMachineInst *inst,
@@ -682,6 +716,8 @@ public:
   }
   void build_modifiers(std::string &out) const override;
   void implicit_uses(RegisterSet &uses) const override;
+  void append_src_operand(std::string &out, uint8_t operand_index) const override;
+  void append_dst_operand(std::string &out, uint8_t operand_index) const override;
   bool has_lit_0();
   bool has_lit_1();
   bool has_lit_0_has_lit_1();

@@ -338,6 +338,94 @@ void Smem::build_modifiers(std::string &out) const {
     out += " dlc";
 }
 
+bool Vop1::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 1:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 28:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+  case 39:
+  case 42:
+  case 43:
+  case 46:
+  case 51:
+  case 53:
+  case 54:
+  case 55:
+  case 56:
+  case 57:
+  case 58:
+  case 59:
+  case 63:
+  case 64:
+  case 66:
+  case 67:
+  case 68:
+  case 72:
+  case 80:
+  case 81:
+  case 82:
+  case 83:
+  case 84:
+  case 85:
+  case 86:
+  case 87:
+  case 88:
+  case 89:
+  case 90:
+  case 91:
+  case 92:
+  case 93:
+  case 94:
+  case 95:
+  case 96:
+  case 97:
+  case 98:
+  case 99:
+  case 100:
+  case 105:
+  case 106:
+  case 107:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vop1::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vop1::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vop1::append_mnemonic(std::string &out) const {
+  if (!(has_encoded_dpp() || has_encoded_dpp8()) || !mnemonic_.ends_with("_e32")) {
+    out += mnemonic_;
+    return;
+  }
+  out.append(mnemonic_.data(), mnemonic_.size() - 4);
+  out += "_dpp";
+}
+
 bool Vop1::has_encoded_literal32() const {
   switch (inst_.op) {
   case 1:
@@ -428,15 +516,18 @@ Vop1::Vop1(std::string_view mnemonic, const Vop1MachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0) ||
-      has_encoded_literal32())
+  if (has_encoded_dpp() || has_encoded_dpp8() || has_encoded_literal32())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
 }
 
 void Vop1::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -460,6 +551,155 @@ bool Vop1::default_encoding() {
 }
 
 bool Vop1::has_lit() { return inst_.src0 == 255; }
+
+bool Vopc::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+  case 16:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 29:
+  case 30:
+  case 31:
+  case 49:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+  case 62:
+  case 64:
+  case 65:
+  case 66:
+  case 67:
+  case 68:
+  case 69:
+  case 70:
+  case 71:
+  case 72:
+  case 73:
+  case 74:
+  case 75:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+  case 125:
+  case 126:
+  case 128:
+  case 129:
+  case 130:
+  case 131:
+  case 132:
+  case 133:
+  case 134:
+  case 135:
+  case 136:
+  case 137:
+  case 138:
+  case 139:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 144:
+  case 145:
+  case 146:
+  case 147:
+  case 148:
+  case 149:
+  case 150:
+  case 151:
+  case 152:
+  case 153:
+  case 154:
+  case 155:
+  case 156:
+  case 157:
+  case 158:
+  case 159:
+  case 177:
+  case 178:
+  case 179:
+  case 180:
+  case 181:
+  case 182:
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 192:
+  case 193:
+  case 194:
+  case 195:
+  case 196:
+  case 197:
+  case 198:
+  case 199:
+  case 200:
+  case 201:
+  case 202:
+  case 203:
+  case 204:
+  case 205:
+  case 206:
+  case 207:
+  case 253:
+  case 254:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vopc::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vopc::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vopc::append_mnemonic(std::string &out) const {
+  if (!(has_encoded_dpp() || has_encoded_dpp8()) || !mnemonic_.ends_with("_e32")) {
+    out += mnemonic_;
+    return;
+  }
+  out.append(mnemonic_.data(), mnemonic_.size() - 4);
+  out += "";
+}
 
 bool Vopc::has_encoded_literal32() const {
   switch (inst_.op) {
@@ -665,15 +905,18 @@ Vopc::Vopc(std::string_view mnemonic, const VopcMachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0) ||
-      has_encoded_literal32())
+  if (has_encoded_dpp() || has_encoded_dpp8() || has_encoded_literal32())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
 }
 
 void Vopc::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -682,6 +925,71 @@ bool Vopc::default_encoding() {
 }
 
 bool Vopc::has_lit() { return inst_.src0 == 255; }
+
+bool Vop2::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 7:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 15:
+  case 16:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 29:
+  case 30:
+  case 32:
+  case 33:
+  case 34:
+  case 37:
+  case 38:
+  case 39:
+  case 43:
+  case 47:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 57:
+  case 58:
+  case 59:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vop2::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vop2::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vop2::append_mnemonic(std::string &out) const {
+  if (!(has_encoded_dpp() || has_encoded_dpp8()) || !mnemonic_.ends_with("_e32")) {
+    out += mnemonic_;
+    return;
+  }
+  out.append(mnemonic_.data(), mnemonic_.size() - 4);
+  out += "_dpp";
+}
 
 bool Vop2::has_encoded_literal32() const {
   switch (inst_.op) {
@@ -743,8 +1051,7 @@ Vop2::Vop2(std::string_view mnemonic, const Vop2MachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0) ||
-      has_encoded_literal32() || hasImpliedLiteral())
+  if (has_encoded_dpp() || has_encoded_dpp8() || has_encoded_literal32() || hasImpliedLiteral())
     size_ += sizeof(MachineInst);
   if (hasImpliedLiteral())
     literal_ = reinterpret_cast<const uint32_t *>(inst)[1];
@@ -753,7 +1060,11 @@ Vop2::Vop2(std::string_view mnemonic, const Vop2MachineInst *inst, ExecuteFn exe
 }
 
 void Vop2::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -780,6 +1091,521 @@ bool Vop2::has_lit() { return inst_.src0 == 255; }
 
 bool Vop2::hasImpliedLiteral() {
   return inst_.op == 44 || inst_.op == 45 || inst_.op == 55 || inst_.op == 56;
+}
+
+bool Vop3::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+  case 16:
+  case 17:
+  case 18:
+  case 19:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 29:
+  case 30:
+  case 31:
+  case 49:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+  case 62:
+  case 64:
+  case 65:
+  case 66:
+  case 67:
+  case 68:
+  case 69:
+  case 70:
+  case 71:
+  case 72:
+  case 73:
+  case 74:
+  case 75:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+  case 125:
+  case 126:
+  case 128:
+  case 129:
+  case 130:
+  case 131:
+  case 132:
+  case 133:
+  case 134:
+  case 135:
+  case 136:
+  case 137:
+  case 138:
+  case 139:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 144:
+  case 145:
+  case 146:
+  case 147:
+  case 148:
+  case 149:
+  case 150:
+  case 151:
+  case 152:
+  case 153:
+  case 154:
+  case 155:
+  case 156:
+  case 157:
+  case 158:
+  case 159:
+  case 177:
+  case 178:
+  case 179:
+  case 180:
+  case 181:
+  case 182:
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 192:
+  case 193:
+  case 194:
+  case 195:
+  case 196:
+  case 197:
+  case 198:
+  case 199:
+  case 200:
+  case 201:
+  case 202:
+  case 203:
+  case 204:
+  case 205:
+  case 206:
+  case 207:
+  case 253:
+  case 254:
+  case 257:
+  case 259:
+  case 260:
+  case 261:
+  case 263:
+  case 264:
+  case 265:
+  case 266:
+  case 267:
+  case 268:
+  case 271:
+  case 272:
+  case 273:
+  case 274:
+  case 275:
+  case 276:
+  case 280:
+  case 281:
+  case 282:
+  case 283:
+  case 284:
+  case 285:
+  case 286:
+  case 293:
+  case 294:
+  case 295:
+  case 299:
+  case 303:
+  case 306:
+  case 307:
+  case 308:
+  case 309:
+  case 310:
+  case 313:
+  case 314:
+  case 315:
+  case 385:
+  case 389:
+  case 390:
+  case 391:
+  case 392:
+  case 394:
+  case 395:
+  case 396:
+  case 397:
+  case 398:
+  case 401:
+  case 402:
+  case 403:
+  case 404:
+  case 412:
+  case 416:
+  case 417:
+  case 418:
+  case 419:
+  case 420:
+  case 421:
+  case 423:
+  case 426:
+  case 427:
+  case 430:
+  case 435:
+  case 437:
+  case 438:
+  case 439:
+  case 440:
+  case 441:
+  case 442:
+  case 443:
+  case 447:
+  case 448:
+  case 450:
+  case 451:
+  case 452:
+  case 456:
+  case 464:
+  case 465:
+  case 466:
+  case 467:
+  case 468:
+  case 469:
+  case 470:
+  case 471:
+  case 472:
+  case 473:
+  case 474:
+  case 475:
+  case 476:
+  case 477:
+  case 478:
+  case 479:
+  case 480:
+  case 481:
+  case 482:
+  case 483:
+  case 484:
+  case 489:
+  case 490:
+  case 491:
+  case 521:
+  case 522:
+  case 523:
+  case 524:
+  case 525:
+  case 526:
+  case 527:
+  case 528:
+  case 529:
+  case 530:
+  case 531:
+  case 533:
+  case 534:
+  case 535:
+  case 536:
+  case 537:
+  case 538:
+  case 539:
+  case 540:
+  case 541:
+  case 542:
+  case 543:
+  case 544:
+  case 545:
+  case 546:
+  case 547:
+  case 548:
+  case 549:
+  case 550:
+  case 569:
+  case 576:
+  case 577:
+  case 580:
+  case 581:
+  case 582:
+  case 583:
+  case 584:
+  case 585:
+  case 586:
+  case 587:
+  case 588:
+  case 589:
+  case 590:
+  case 591:
+  case 592:
+  case 593:
+  case 595:
+  case 596:
+  case 597:
+  case 598:
+  case 599:
+  case 600:
+  case 601:
+  case 602:
+  case 605:
+  case 606:
+  case 607:
+  case 608:
+  case 609:
+  case 610:
+  case 611:
+  case 612:
+  case 613:
+  case 614:
+  case 615:
+  case 771:
+  case 772:
+  case 773:
+  case 774:
+  case 775:
+  case 777:
+  case 778:
+  case 779:
+  case 780:
+  case 781:
+  case 782:
+  case 785:
+  case 786:
+  case 787:
+  case 796:
+  case 797:
+  case 798:
+  case 799:
+  case 800:
+  case 801:
+  case 802:
+  case 803:
+  case 804:
+  case 805:
+  case 806:
+  case 824:
+  case 825:
+  case 826:
+  case 866:
+  case 867:
+  case 868:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vop3::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vop3::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vop3::append_mnemonic(std::string &out) const {
+  out += mnemonic_;
+  if (has_encoded_dpp() || has_encoded_dpp8())
+    out += "_e64_dpp";
+}
+
+bool Vop3::displays_vop3_op_sel() const {
+  switch (inst_.op) {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+  case 4:
+  case 5:
+  case 6:
+  case 7:
+  case 8:
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+  case 49:
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+  case 54:
+  case 57:
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+  case 62:
+  case 125:
+  case 128:
+  case 129:
+  case 130:
+  case 131:
+  case 132:
+  case 133:
+  case 134:
+  case 135:
+  case 136:
+  case 137:
+  case 138:
+  case 139:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 177:
+  case 178:
+  case 179:
+  case 180:
+  case 181:
+  case 182:
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 253:
+  case 306:
+  case 307:
+  case 308:
+  case 309:
+  case 310:
+  case 313:
+  case 314:
+  case 315:
+  case 394:
+  case 395:
+  case 412:
+  case 464:
+  case 465:
+  case 466:
+  case 467:
+  case 468:
+  case 469:
+  case 470:
+  case 471:
+  case 472:
+  case 473:
+  case 474:
+  case 475:
+  case 476:
+  case 477:
+  case 478:
+  case 479:
+  case 480:
+  case 481:
+  case 482:
+  case 483:
+  case 484:
+  case 489:
+  case 490:
+  case 491:
+  case 534:
+  case 535:
+  case 577:
+  case 584:
+  case 585:
+  case 586:
+  case 587:
+  case 588:
+  case 589:
+  case 590:
+  case 591:
+  case 592:
+  case 593:
+  case 595:
+  case 596:
+  case 601:
+  case 602:
+  case 608:
+  case 609:
+  case 614:
+  case 615:
+  case 771:
+  case 772:
+  case 773:
+  case 777:
+  case 778:
+  case 779:
+  case 780:
+  case 781:
+  case 782:
+  case 785:
+  case 786:
+  case 787:
+  case 824:
+  case 825:
+  case 826:
+  case 866:
+  case 867:
+  case 868:
+    return true;
+  default:
+    return false;
+  }
+}
+
+uint32_t Vop3::vop3_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
+}
+
+int32_t Vop3::vop3_encoded_source_index(uint8_t operand_index) const {
+  int32_t encoded_index = 0;
+  for (uint8_t src = 0; src <= operand_index; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (repeats_dst) {
+      if (src == operand_index)
+        return -1;
+      continue;
+    }
+    if (src == operand_index)
+      return encoded_index;
+    ++encoded_index;
+  }
+  return -1;
 }
 
 bool Vop3::has_encoded_literal32() const {
@@ -1223,14 +2049,22 @@ Vop3::Vop3(std::string_view mnemonic, const Vop3MachineInst *inst, ExecuteFn exe
   opcode_ = inst_.op;
   if (has_encoded_literal32())
     size_ += sizeof(MachineInst);
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp() || has_encoded_dpp8())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
 }
 
 void Vop3::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3_disassembly(out, inst->op_sel, inst->clamp, inst->omod,
+                                       vop3_encoded_source_count(), displays_vop3_op_sel());
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -1245,6 +2079,29 @@ void Vop3::implicit_uses(RegisterSet &uses) const {
         if (auto ref = dst->to_register_ref())
           if (ref->cls == RegClass::VGPR)
             uses.expand(*ref);
+}
+
+void Vop3::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  const int32_t modifier_index = vop3_encoded_source_index(operand_index);
+  const auto reg = operand->to_register_ref();
+  const bool half_width = modifier_index >= 0 && true && operand->size_bits() == 16 && reg &&
+                          reg->cls == RegClass::VGPR;
+  if (modifier_index < 0) {
+    out += operand->name();
+    return;
+  }
+  amdgpu::vop::append_vop3_operand(out, operand->name(), (inst_.abs >> modifier_index) & 1,
+                                   (inst_.neg >> modifier_index) & 1, half_width,
+                                   (inst_.op_sel >> modifier_index) & 1);
+}
+
+void Vop3::append_dst_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = dst_operands_[operand_index];
+  const auto reg = operand->to_register_ref();
+  const bool half_width = true && operand->size_bits() == 16 && reg && reg->cls == RegClass::VGPR;
+  amdgpu::vop::append_vop3_operand(out, operand->name(), false, false, half_width,
+                                   (inst_.op_sel >> 3) & 1);
 }
 
 bool Vop3::has_lit_0() { return inst_.src0 == 255 && inst_.src1 != 255 && inst_.src2 != 255; }
@@ -1274,6 +2131,47 @@ bool Vop3::has_lit_1_has_lit_2() {
 
 bool Vop3::has_lit_0_has_lit_1_has_lit_2() {
   return inst_.src0 == 255 && inst_.src1 == 255 && inst_.src2 == 255;
+}
+
+bool Vop3p::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 19:
+  case 26:
+  case 32:
+  case 33:
+  case 34:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vop3p::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vop3p::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vop3p::append_mnemonic(std::string &out) const {
+  out += mnemonic_;
+  if (has_encoded_dpp() || has_encoded_dpp8())
+    out += "_e64_dpp";
+}
+
+uint32_t Vop3p::vop3p_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
 }
 
 bool Vop3p::has_encoded_literal32() const {
@@ -1321,14 +2219,23 @@ Vop3p::Vop3p(std::string_view mnemonic, const Vop3pMachineInst *inst, ExecuteFn 
   opcode_ = inst_.op;
   if (has_encoded_literal32())
     size_ += sizeof(MachineInst);
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp() || has_encoded_dpp8())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
 }
 
 void Vop3p::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3p_disassembly(
+      out, inst->op_sel, inst->op_sel_hi | (inst->op_sel_hi_2 << 2), inst->neg, inst->neg_hi,
+      inst->clamp, vop3p_encoded_source_count(), (inst_.op >= 0 && inst_.op <= 18));
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -1533,6 +2440,68 @@ void Flat::implicit_uses(RegisterSet &uses) const {
   }
 }
 
+bool Vop3SdstEnc::supports_dpp_opcode() const {
+  switch (inst_.op) {
+  case 288:
+  case 289:
+  case 290:
+  case 768:
+  case 769:
+  case 770:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool Vop3SdstEnc::has_encoded_dpp() const {
+  return supports_dpp_opcode() && inst_.src0 == amdgpu::SRC_DPP;
+}
+
+bool Vop3SdstEnc::has_encoded_dpp8() const {
+  return supports_dpp_opcode() && amdgpu::dpp::is_src_dpp8(inst_.src0);
+}
+
+void Vop3SdstEnc::append_mnemonic(std::string &out) const {
+  out += mnemonic_;
+  if (has_encoded_dpp() || has_encoded_dpp8())
+    out += "_e64_dpp";
+}
+
+uint32_t Vop3SdstEnc::vop3_encoded_source_count() const {
+  uint32_t count = 0;
+  for (uint8_t src = 0; src < num_src_; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (!repeats_dst)
+      ++count;
+  }
+  return count;
+}
+
+int32_t Vop3SdstEnc::vop3_encoded_source_index(uint8_t operand_index) const {
+  int32_t encoded_index = 0;
+  for (uint8_t src = 0; src <= operand_index; ++src) {
+    if (src_operands_[src]->is_fieldless())
+      continue;
+    bool repeats_dst = false;
+    for (uint8_t dst = 0; dst < num_dst_; ++dst)
+      repeats_dst |= src_operands_[src] == dst_operands_[dst];
+    if (repeats_dst) {
+      if (src == operand_index)
+        return -1;
+      continue;
+    }
+    if (src == operand_index)
+      return encoded_index;
+    ++encoded_index;
+  }
+  return -1;
+}
+
 bool Vop3SdstEnc::has_encoded_literal32() const {
   switch (inst_.op) {
   case 288:
@@ -1561,14 +2530,22 @@ Vop3SdstEnc::Vop3SdstEnc(std::string_view mnemonic, const Vop3SdstEncMachineInst
   opcode_ = inst_.op;
   if (has_encoded_literal32())
     size_ += sizeof(MachineInst);
-  if (inst_.src0 == amdgpu::SRC_DPP || amdgpu::dpp::is_src_dpp8(inst_.src0))
+  if (has_encoded_dpp() || has_encoded_dpp8())
     size_ += sizeof(MachineInst);
   std::memcpy(raw_words_.data(), inst, size_);
   raw_encoding_ = raw_words_.data();
 }
 
 void Vop3SdstEnc::build_modifiers(std::string &out) const {
-  if (amdgpu::dpp::is_src_dpp8(inst_.src0))
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3_disassembly(out, 0, inst->clamp, inst->omod, vop3_encoded_source_count(),
+                                       false);
+  if (has_encoded_dpp())
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
+  if (has_encoded_dpp8())
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
 
@@ -1583,6 +2560,28 @@ void Vop3SdstEnc::implicit_uses(RegisterSet &uses) const {
         if (auto ref = dst->to_register_ref())
           if (ref->cls == RegClass::VGPR)
             uses.expand(*ref);
+}
+
+void Vop3SdstEnc::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  const int32_t modifier_index = vop3_encoded_source_index(operand_index);
+  const auto reg = operand->to_register_ref();
+  const bool half_width = modifier_index >= 0 && false && operand->size_bits() == 16 && reg &&
+                          reg->cls == RegClass::VGPR;
+  if (modifier_index < 0) {
+    out += operand->name();
+    return;
+  }
+  amdgpu::vop::append_vop3_operand(out, operand->name(), (0 >> modifier_index) & 1,
+                                   (inst_.neg >> modifier_index) & 1, half_width,
+                                   (0 >> modifier_index) & 1);
+}
+
+void Vop3SdstEnc::append_dst_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = dst_operands_[operand_index];
+  const auto reg = operand->to_register_ref();
+  const bool half_width = false && operand->size_bits() == 16 && reg && reg->cls == RegClass::VGPR;
+  amdgpu::vop::append_vop3_operand(out, operand->name(), false, false, half_width, (0 >> 3) & 1);
 }
 
 bool Vop3SdstEnc::has_lit_0() {
