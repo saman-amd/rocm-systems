@@ -301,6 +301,7 @@ if(BUILD_TESTS)
       VersionInfoTests.cpp
       device/TestOp128.cpp
       device/GinDeviceTests.cpp
+      device/SymmetricAccumTypeTests.cpp
       device/GinAnvilIpcDevice_test.cpp
       device/HierarchicalShuffleTests.cpp
       DeviceApiTests.cpp
