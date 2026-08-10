@@ -442,6 +442,9 @@ try {
 
     return {hipFileSuccess, hipSuccess};
 }
+catch (const BatchFull &) {
+    return {hipFileBatchFull, hipSuccess};
+}
 catch (const DriverNotInitialized &) {
     return {hipFileDriverNotInitialized, hipSuccess};
 }
