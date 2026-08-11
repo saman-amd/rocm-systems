@@ -4974,7 +4974,9 @@ amdsmi_status_t amdsmi_get_clock_info(amdsmi_processor_handle processor_handle,
   }
   info->max_clk = max_freq;
   info->min_clk = min_freq;
-  info->clk_deep_sleep = static_cast<uint8_t>(sleep_state_freq);
+  // clk_deep_sleep is a True/False flag; casting the raw sleep frequency to
+  // uint8_t collapsed floors >= 256 MHz to 0, reporting a false DISABLED.
+  info->clk_deep_sleep = (sleep_state_freq > 0) ? 1 : 0;
 
   switch (clk_type) {
     case AMDSMI_CLK_TYPE_GFX:

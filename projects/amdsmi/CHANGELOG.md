@@ -70,6 +70,10 @@ Full documentation for amd_smi_lib is available at [https://rocm.docs.amd.com/pr
 
 ### Fixed
 
+- **Fixed `amd-smi metric --clock` reporting VCLK/DCLK `MIN_CLK` as the nominal clock instead of the deep-sleep floor**.
+  - When the amdgpu DPM tables (`pp_dpm_vclk`/`pp_dpm_dclk`) expose the power-gated floor as a deep-sleep (`S:`) entry, that frequency was read only for the deep-sleep flag and left out of the min/max scan, so `min_clk` collapsed onto the nominal clock (for example 2100 MHz VCLK / 1700 MHz DCLK). The deep-sleep frequency is now folded into `min_clk`, so it reflects the true achievable floor (for example ~66 MHz VCLK / ~53 MHz DCLK).
+  - `DEEP_SLEEP` in `amd-smi metric --clock` is now taken from the driver's `clk_deep_sleep` flag instead of being inferred from `clk < min_clk`. The old heuristic only reported `ENABLED` because `min_clk` was inflated; with the corrected `min_clk` it would have flipped to `DISABLED` even while the clock was parked at its deep-sleep floor.
+
 - **Fixed `amd-smi ras --cper --json` emitting nothing when there are no CPER entries**.
   - The common no-entries case printed empty output, so consumers feeding stdout to `json.loads` failed with `Expecting value: line 1 column 1 (char 0)`. The command now always emits exactly one valid JSON document: `[]` when there are no entries, or a single aggregated array across all GPUs when there are. `--follow` mode stays silent until entries appear. The human-readable primary-partition warning is also suppressed in JSON mode so it no longer corrupts the output.
 

@@ -296,6 +296,65 @@ amdsmi_status_t smi_amdgpu_get_power_cap(amd::smi::AMDSmiGPUDevice* device, uint
   return AMDSMI_STATUS_SUCCESS;
 }
 
+amdsmi_status_t smi_amdgpu_parse_clk_ranges(std::istream& ranges, bool derive_minmax,
+                                            unsigned int* max_freq, unsigned int* min_freq,
+                                            unsigned int* num_dpm, unsigned int* sleep_freq) {
+  char str[10];
+  char single_char;
+  unsigned int current_freq = 0;
+  for (std::string line; getline(ranges, line);) {
+    if (line.empty()) {
+      continue;
+    }
+    unsigned int dpm_level, freq;
+
+    char firstChar = line[0];
+    if (firstChar == 'S') {
+      if (sscanf(line.c_str(), "%c: %u%9s", &single_char, sleep_freq, str) <= 2) {
+        return AMDSMI_STATUS_NO_DATA;
+      }
+    } else {
+      /**
+       * if the first line contains '*', then
+       * we are saving that value as current_freq then checking
+       * for other dpm levels if none are found then we
+       * set min and max to current_freq as per Driver
+       * We then skip to the next line to avoid getting
+       * incorrect min value.
+       */
+
+      if (sscanf(line.c_str(), "%u: %u%c", &dpm_level, &freq, str) <= 2) {
+        return AMDSMI_STATUS_IO;
+      }
+
+      char lastChar = line.back();
+      if (lastChar == '*') {
+        current_freq = freq;
+      }
+
+      // min/max come from pp_od_clk_voltage for user-defined sclk/mclk/fclk;
+      // derive them from the DPM levels only for the other clocks.
+      if (derive_minmax) {
+        *max_freq = freq > *max_freq ? freq : *max_freq;
+        *min_freq = freq < *min_freq ? freq : *min_freq;
+      }
+      *num_dpm = dpm_level > *num_dpm ? dpm_level : *num_dpm;
+    }
+  }
+  if (derive_minmax && *num_dpm == 0 && current_freq > 0) {
+    // A lone dpm level (dpm == 0) pins min/max to it, but only when deriving
+    // them here; derive_minmax=false means the caller's pp_od range stands.
+    *max_freq = current_freq;
+    *min_freq = current_freq;
+  }
+  // The deep-sleep (S:) entry is the power-gated floor the clock actually reaches
+  // at idle, so it defines the true min_clk rather than the lowest DPM level.
+  if (*sleep_freq != UINT_MAX && *sleep_freq < *min_freq) {
+    *min_freq = *sleep_freq;
+  }
+  return AMDSMI_STATUS_SUCCESS;
+}
+
 amdsmi_status_t smi_amdgpu_get_ranges(amd::smi::AMDSmiGPUDevice* device, amdsmi_clk_type_t domain,
                                       int* max_freq, int* min_freq, int* num_dpm,
                                       int* sleep_state_freq) {
@@ -347,14 +406,12 @@ amdsmi_status_t smi_amdgpu_get_ranges(amd::smi::AMDSmiGPUDevice* device, amdsmi_
     return AMDSMI_STATUS_NOT_SUPPORTED;
   }
 
-  unsigned int max, min, dpm, sleep_freq, current_freq;
+  unsigned int max, min, dpm, sleep_freq;
   char str[10];
-  char single_char;
   max = 0;
   min = UINT_MAX;
   dpm = 0;
   sleep_freq = UINT_MAX;
-  current_freq = 0;
   // if getting sclk, mclk or fclk info, read pp_od_clk_voltage for min and max info
   if (sclk || mclk || fclk) {
     std::ifstream smclk_ranges(smclk_min_max_fullpath.c_str());
@@ -416,56 +473,21 @@ amdsmi_status_t smi_amdgpu_get_ranges(amd::smi::AMDSmiGPUDevice* device, amdsmi_
       smclk_ranges.close();
     }
   }
-  // obtain rest of info from regular pp_dpm_* files.
-  for (std::string line; getline(ranges, line);) {
-    unsigned int dpm_level, freq;
-
-    char firstChar = line[0];
-    if (firstChar == 'S') {
-      if (sscanf(line.c_str(), "%c: %d%9s", &single_char, &sleep_freq, str) <= 2) {
-        ranges.close();
-        return AMDSMI_STATUS_NO_DATA;
-      }
-    } else {
-      /**
-       * if the first line contains '*', then
-       * we are saving that value as current_freq then checking
-       * for other dpm levels if none are found then we
-       * set min and max to current_freq as per Driver
-       * We then skip to the next line to avoid getting
-       * incorrect min value.
-       */
-
-      if (sscanf(line.c_str(), "%u: %d%c", &dpm_level, &freq, str) <= 2) {
-        ranges.close();
-        return AMDSMI_STATUS_IO;
-      }
-
-      char lastChar = line.back();
-      if (lastChar == '*') {
-        current_freq = freq;
-      }
-
-      // not * was detected so check for the min max if not sclk, mclk, or fclk, which are user
-      // defined
-      if (!sclk && !mclk && !fclk) {
-        max = freq > max ? freq : max;
-        min = freq < min ? freq : min;
-      }
-      dpm = dpm_level > dpm ? dpm_level : dpm;
-    }
+  // Parse the numbered DPM levels and any deep-sleep floor from the pp_dpm_*
+  // file. sclk/mclk/fclk already took their min/max from pp_od_clk_voltage
+  // above, so only the remaining clocks derive them here.
+  amdsmi_status_t parse_status =
+      smi_amdgpu_parse_clk_ranges(ranges, !(sclk || mclk || fclk), &max, &min, &dpm, &sleep_freq);
+  ranges.close();
+  if (parse_status != AMDSMI_STATUS_SUCCESS) {
+    return parse_status;
   }
-  if (dpm == 0 && current_freq > 0) {
-    // if the dpm level is 0, then the current frequency is the min/max frequency
-    max = current_freq;
-    min = current_freq;
-  }
+
   if (num_dpm) *num_dpm = dpm;
   if (max_freq) *max_freq = max;
   if (min_freq) *min_freq = min;
   if (sleep_state_freq) *sleep_state_freq = sleep_freq;
 
-  ranges.close();
   return AMDSMI_STATUS_SUCCESS;
 }
 

@@ -29,6 +29,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <istream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -50,6 +51,15 @@ amdsmi_status_t smi_amdgpu_get_power_cap(amd::smi::AMDSmiGPUDevice* device, uint
 amdsmi_status_t smi_amdgpu_get_ranges(amd::smi::AMDSmiGPUDevice* device, amdsmi_clk_type_t domain,
                                       int* max_freq, int* min_freq, int* num_dpm,
                                       int* sleep_state_freq);
+// Parses a pp_dpm_* clock table; split out from smi_amdgpu_get_ranges for
+// hardware-free unit testing. derive_minmax takes min/max from the DPM levels;
+// the deep-sleep "S:" floor, when present, is folded into *min_freq.
+// Out-params accumulate in place, so callers must pre-seed them: *num_dpm = 0
+// and *sleep_freq = UINT_MAX always; *max_freq = 0 and *min_freq = UINT_MAX
+// when derive_minmax is true, else the caller's existing min/max range.
+amdsmi_status_t smi_amdgpu_parse_clk_ranges(std::istream& ranges, bool derive_minmax,
+                                            unsigned int* max_freq, unsigned int* min_freq,
+                                            unsigned int* num_dpm, unsigned int* sleep_freq);
 amdsmi_status_t smi_amdgpu_get_enabled_blocks(amd::smi::AMDSmiGPUDevice* device,
                                               uint64_t* enabled_blocks);
 amdsmi_status_t smi_amdgpu_get_bad_page_info(amd::smi::AMDSmiGPUDevice* device, uint32_t* num_pages,
