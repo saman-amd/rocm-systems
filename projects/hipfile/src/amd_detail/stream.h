@@ -18,13 +18,15 @@ class IStream {
 public:
     virtual ~IStream() = default;
 
-    virtual hipStream_t                  getHipStream() const      = 0;
-    virtual hipDevice_t                  getHipDevice() const      = 0;
-    virtual bool                         fixedBufferOffset() const = 0;
-    virtual bool                         fixedFileOffset() const   = 0;
-    virtual bool                         fixedIOSize() const       = 0;
-    virtual bool                         pageAligned() const       = 0;
-    virtual std::unique_lock<std::mutex> getLock()                 = 0;
+    virtual hipStream_t                  getHipStream() const       = 0;
+    virtual hipDevice_t                  getHipDevice() const       = 0;
+    virtual bool                         fixedBufferOffset() const  = 0;
+    virtual bool                         fixedFileOffset() const    = 0;
+    virtual bool                         fixedIOSize() const        = 0;
+    virtual bool                         pageAligned() const        = 0;
+    virtual std::unique_lock<std::mutex> getLock()                  = 0;
+    virtual void                        *asyncBufferHostPtr() const = 0;
+    virtual void                        *asyncBufferDevPtr() const  = 0;
 };
 
 class StreamMap;
@@ -40,6 +42,8 @@ public:
     virtual bool                         fixedIOSize() const override;
     virtual bool                         pageAligned() const override;
     virtual std::unique_lock<std::mutex> getLock() override;
+    virtual void                        *asyncBufferHostPtr() const override;
+    virtual void                        *asyncBufferDevPtr() const override;
 
     Stream(const hipStream_t hip_stream, uint32_t flags, const PassKey<StreamMap> &k);
 
@@ -56,6 +60,9 @@ private:
     bool        fixed_io_size;
     bool        page_aligned;
     std::mutex  mutex;
+
+    std::unique_ptr<void, void (*)(void *)> async_buffer;
+    void                                   *async_buffer_dev_ptr;
 };
 
 class StreamMap {
