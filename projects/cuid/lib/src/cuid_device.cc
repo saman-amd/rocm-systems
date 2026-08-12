@@ -38,8 +38,6 @@
 #include <iostream>
 #include <iterator>
 #include <mutex>
-#include <openssl/evp.h>
-#include <openssl/sha.h>
 #include <sstream>
 #include <sys/types.h>
 #include <unistd.h>
