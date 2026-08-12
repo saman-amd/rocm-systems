@@ -5,16 +5,12 @@
  */
 
 #include <hip/hip_runtime.h>
-#include <hip/hip_deprecated.h>
 #include <hip/amd_detail/hip_storage.h>
 
 #include "hip_internal.hpp"
 #include "hip_executionctx.hpp"
 #include "hip_mempool_impl.hpp"
 #include "hip_platform.hpp"
-
-#undef hipGetDeviceProperties
-#undef hipDeviceProp_t
 
 namespace hip {
 
@@ -623,7 +619,7 @@ hipError_t hipDeviceGetLuid(char* luid, unsigned int* deviceNodeMask, hipDevice_
 }
 
 // ================================================================================================
-hipError_t ihipGetDeviceProperties(hipDeviceProp_tR0600* props, int device) {
+hipError_t ihipGetDeviceProperties(hipDeviceProp_t* props, int device) {
   if (props == nullptr) {
     return hipErrorInvalidValue;
   }
@@ -827,6 +823,8 @@ hipError_t ihipGetDeviceProperties(hipDeviceProp_tR0600* props, int device) {
 hipError_t hipGetDevicePropertiesR0600(hipDeviceProp_tR0600* prop, int device) {
   HIP_INIT_API(hipGetDevicePropertiesR0600, prop, device);
 
+  // For now, we can forward to the internal/unstable API. In the future, if
+  // hipDeviceProp_t is different, this will fail to compile.
   HIP_RETURN(ihipGetDeviceProperties(prop, device));
 }
 
@@ -1022,8 +1020,3 @@ hipError_t hipGetProcAddress_spt(const char* symbol, void** pfn, int hipVersion,
 }
 
 }  // namespace hip
-
-// ================================================================================================
-extern "C" hipError_t hipGetDeviceProperties(hipDeviceProp_tR0000* props, hipDevice_t device) {
-  return hip::hipGetDevicePropertiesR0000(props, device);
-}

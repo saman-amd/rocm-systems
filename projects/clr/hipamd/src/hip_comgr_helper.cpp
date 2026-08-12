@@ -1102,7 +1102,7 @@ bool LinkProgram::LinkComplete(void** bin_out, size_t* size_out) {
   if (!findIsa()) {
     return false;
   }
- 
+
   hip::comgr_helper::ComgrDataSetUniqueHandle link_output;
   if (link_output.Create() != AMD_COMGR_STATUS_SUCCESS) {
     return false;

@@ -30,6 +30,10 @@
 #include <hip/hip_common.h>
 #include <hip/linker_types.h>
 
+#if HIP_FORCE_API_VERSION > HIP_API_VERSION
+#  error "HIP_FORCE_API_VERSION is newer than the installed HIP headers"
+#endif
+
 enum {
   HIP_SUCCESS = 0,
   HIP_ERROR_INVALID_VALUE,
@@ -84,9 +88,107 @@ typedef struct hipUUID_t {
 //---
 // Common headers for both NVCC and HIP-Clang paths:
 
-#define hipGetDeviceProperties hipGetDevicePropertiesR0600
-#define hipDeviceProp_t hipDeviceProp_tR0600
-#define hipChooseDevice hipChooseDeviceR0600
+/*
+ Versioning struct. Because each public API must use the versioned struct to
+ ensure ABI compatibility, we must typedef the actual struct name here.
+*/
+
+// This is an older version of hipDeviceProp_t
+// This struct is also kept in hip_device.cpp
+// We always need to expose this because hip_prof_str.h
+
+typedef struct hipDeviceProp_tR0000 {
+  char name[256];            ///< Device name.
+  size_t totalGlobalMem;     ///< Size of global memory region (in bytes).
+  size_t sharedMemPerBlock;  ///< Size of shared memory region (in bytes).
+  int regsPerBlock;          ///< Registers per block.
+  int warpSize;              ///< Warp size.
+  int maxThreadsPerBlock;    ///< Max work items per work group or workgroup max size.
+  int maxThreadsDim[3];      ///< Max number of threads in each dimension (XYZ) of a block.
+  int maxGridSize[3];        ///< Max grid dimensions (XYZ).
+  int clockRate;             ///< Max clock frequency of the multiProcessors in khz.
+  int memoryClockRate;       ///< Max global memory clock frequency in khz.
+  int memoryBusWidth;        ///< Global memory bus width in bits.
+  size_t totalConstMem;      ///< Size of shared memory region (in bytes).
+  int major;  ///< Major compute capability.  On HCC, this is an approximation and features may
+              ///< differ from CUDA CC.  See the arch feature flags for portable ways to query
+              ///< feature caps.
+  int minor;  ///< Minor compute capability.  On HCC, this is an approximation and features may
+              ///< differ from CUDA CC.  See the arch feature flags for portable ways to query
+              ///< feature caps.
+  int multiProcessorCount;          ///< Number of multi-processors. When the GPU works in Compute
+                                    ///< Unit (CU) mode, this value equals the number of CUs;
+                                    ///< when in Workgroup Processor (WGP) mode, this value equels
+                                    ///< half of CUs, because a single WGP contains two CUs.
+  int l2CacheSize;                  ///< L2 cache size.
+  int maxThreadsPerMultiProcessor;  ///< Maximum resident threads per multi-processor.
+  int computeMode;                  ///< Compute mode.
+  int clockInstructionRate;  ///< Frequency in khz of the timer used by the device-side "clock*"
+                             ///< instructions.  New for HIP.
+  hipDeviceArch_t arch;      ///< Architectural feature flags.  New for HIP.
+  int concurrentKernels;     ///< Device can possibly execute multiple kernels concurrently.
+  int pciDomainID;           ///< PCI Domain ID
+  int pciBusID;              ///< PCI Bus ID.
+  int pciDeviceID;           ///< PCI Device ID.
+  size_t maxSharedMemoryPerMultiProcessor;  ///< Maximum Shared Memory Per Multiprocessor.
+  int isMultiGpuBoard;                      ///< 1 if device is on a multi-GPU board, 0 if not.
+  int canMapHostMemory;                     ///< Check whether HIP can map host memory
+  int gcnArch;                              ///< DEPRECATED: use gcnArchName instead
+  char gcnArchName[256];                    ///< AMD GCN Arch Name.
+  int integrated;                           ///< APU vs dGPU
+  int cooperativeLaunch;                    ///< HIP device supports cooperative launch
+  int cooperativeMultiDeviceLaunch;         ///< HIP device supports cooperative launch on multiple
+                                            ///< devices
+  int maxTexture1DLinear;                   ///< Maximum size for 1D textures bound to linear memory
+  int maxTexture1D;                         ///< Maximum number of elements in 1D images
+  int maxTexture2D[2];  ///< Maximum dimensions (width, height) of 2D images, in image elements
+  int maxTexture3D[3];  ///< Maximum dimensions (width, height, depth) of 3D images, in image
+                        ///< elements
+  unsigned int* hdpMemFlushCntl;  ///< Addres of HDP_MEM_COHERENCY_FLUSH_CNTL register
+  unsigned int* hdpRegFlushCntl;  ///< Addres of HDP_REG_COHERENCY_FLUSH_CNTL register
+  size_t memPitch;                ///< Maximum pitch in bytes allowed by memory copies
+  size_t textureAlignment;        ///< Alignment requirement for textures
+  size_t texturePitchAlignment;   ///< Pitch alignment requirement for texture references bound to
+                                  ///< pitched memory
+  int kernelExecTimeoutEnabled;   ///< Run time limit for kernels executed on the device
+  int ECCEnabled;                 ///< Device has ECC support enabled
+  int tccDriver;                  ///< 1:If device is Tesla device using TCC driver, else 0
+  int cooperativeMultiDeviceUnmatchedFunc;       ///< HIP device supports cooperative launch on
+                                                 ///< multiple
+                                                 /// devices with unmatched functions
+  int cooperativeMultiDeviceUnmatchedGridDim;    ///< HIP device supports cooperative launch on
+                                                 ///< multiple
+                                                 /// devices with unmatched grid dimensions
+  int cooperativeMultiDeviceUnmatchedBlockDim;   ///< HIP device supports cooperative launch on
+                                                 ///< multiple
+                                                 /// devices with unmatched block dimensions
+  int cooperativeMultiDeviceUnmatchedSharedMem;  ///< HIP device supports cooperative launch on
+                                                 ///< multiple
+                                                 /// devices with unmatched shared memories
+  int isLargeBar;                                ///< 1: if it is a large PCI bar device, else 0
+  int asicRevision;                              ///< Revision of the GPU in this device
+  int managedMemory;                   ///< Device supports allocating managed memory on this system
+  int directManagedMemAccessFromHost;  ///< Host can directly access managed memory on the device
+                                       ///< without migration
+  int concurrentManagedAccess;  ///< Device can coherently access managed memory concurrently with
+                                ///< the CPU
+  int pageableMemoryAccess;     ///< Device supports coherently accessing pageable memory
+                                ///< without calling hipHostRegister on it
+  int pageableMemoryAccessUsesHostPageTables;  ///< Device accesses pageable memory via the host's
+                                               ///< page tables
+} hipDeviceProp_tR0000;
+
+#if HIP_FORCE_API_VERSION < 600
+
+// Legacy version, HIP_ABI_IMPL is on the latest version, so it must not see this.
+typedef hipDeviceProp_tR0000 hipDeviceProp_t;
+// Dummy struct for hip_prof_str.h
+typedef struct hipDeviceProp_tR0600 {} hipDeviceProp_tR0600;
+
+#endif
+
+#if HIP_FORCE_API_VERSION >= 600
+// Latest version.
 
 /**
  * hipDeviceProp
@@ -236,6 +338,10 @@ typedef struct hipDeviceProp_t {
   int isLargeBar;                                ///< 1: if it is a large PCI bar device, else 0
   int asicRevision;                              ///< Revision of the GPU in this device
 } hipDeviceProp_t;
+
+// Latest version, HIP_ABI_IMPL should see this.
+typedef hipDeviceProp_t hipDeviceProp_tR0600;
+#endif
 
 /**
  * hipMemoryType (for pointer attributes)
@@ -396,7 +502,7 @@ typedef enum __HIP_NODISCARD hipError_t {
   hipErrorInvalidResourceType = 914,       ///< Resource type is not valid for the operation.
   hipErrorInvalidResourceConfiguration = 915,  ///< Resource configuration is not valid for
                                                ///< the operation.
-  hipErrorStreamDetached = 916,            ///< The stream is detached.                                              
+  hipErrorStreamDetached = 916,            ///< The stream is detached.
   hipErrorUnknown = 999,                   ///< Unknown error.
   // HSA Runtime Error Codes start here.
   hipErrorRuntimeMemory = 1052,  ///< HSA runtime memory call returned error.  Typically not seen
@@ -657,11 +763,16 @@ enum hipGPUDirectRDMAWritesOrdering {
 #include <hip/driver_types.h>
 #include <hip/texture_types.h>
 #include <hip/surface_types.h>
-#if defined(_MSC_VER)
+
+#if defined(HIP_ABI_IMPL)
+// Nothing is deprecated if we are implementing the HIP ABI.
+#define HIP_DEPRECATED(x)
+#elif defined(_MSC_VER)
 #define HIP_DEPRECATED(msg) __declspec(deprecated(msg))
 #else  // !defined(_MSC_VER)
 #define HIP_DEPRECATED(msg) __attribute__((deprecated(msg)))
 #endif  // !defined(_MSC_VER)
+
 #define HIP_DEPRECATED_MSG                                                                         \
   "This API is marked as deprecated and might not be supported in future releases. For more "      \
   "details please refer "                                                                          \
@@ -2199,6 +2310,7 @@ typedef enum hipMemRangeFlags {
   hipMemRangeFlagsMax = 0x7fffffff
 } hipMemRangeFlags;
 
+
 // Doxygen end group GlobalDefs
 /**
  * @}
@@ -2527,6 +2639,22 @@ hipError_t hipDeviceSetMemPool(int device, hipMemPool_t mem_pool);
  *          change and might have outstanding issues.
  */
 hipError_t hipDeviceGetMemPool(hipMemPool_t* mem_pool, int device);
+
+// hipDeviceProp_t and hipGetDeviceProperties/hipChooseDevice are versioned.
+// See HIP_FORCE_API_VERSION in hip_common.h.
+
+
+
+// Deprecate since 600
+#if HIP_FORCE_API_VERSION < 600 || defined(HIP_ABI_IMPL)
+
+hipError_t hipGetDevicePropertiesR0000(hipDeviceProp_tR0000* prop, int deviceId);
+
+#endif
+
+#if HIP_FORCE_API_VERSION >= 600
+hipError_t hipGetDevicePropertiesR0600(hipDeviceProp_tR0600* prop, int deviceId);
+
 /**
  * @brief Returns device properties.
  *
@@ -2540,7 +2668,13 @@ hipError_t hipDeviceGetMemPool(hipMemPool_t* mem_pool, int device);
  *
  * Populates hipGetDeviceProperties with information for the specified device.
  */
-hipError_t hipGetDeviceProperties(hipDeviceProp_t* prop, int deviceId);
+static inline hipError_t hipGetDeviceProperties(hipDeviceProp_t* prop, int deviceId) {
+  return hipGetDevicePropertiesR0600(prop, deviceId);
+}
+
+#endif
+
+
 /**
  * @brief Gets the maximum width for 1D linear textures on the specified device
  *
@@ -2680,6 +2814,17 @@ hipError_t hipDeviceSetSharedMemConfig(hipSharedMemConfig config);
  *
  */
 hipError_t hipSetDeviceFlags(unsigned flags);
+
+// Deprecate since 600
+#if HIP_FORCE_API_VERSION < 600 || defined(HIP_ABI_IMPL)
+
+hipError_t hipChooseDeviceR0000(int* device, const hipDeviceProp_tR0000* prop);
+
+#endif
+
+#if HIP_FORCE_API_VERSION >= 600
+hipError_t hipChooseDeviceR0600(int* device, const hipDeviceProp_tR0600* prop);
+
 /**
  * @brief Initialize the specified device to be used for GPU executions.
  *
@@ -2712,7 +2857,12 @@ hipError_t hipInitDevice(int device, unsigned int deviceFlags, unsigned int flag
  *
  * @returns #hipSuccess, #hipErrorInvalidValue
  */
-hipError_t hipChooseDevice(int* device, const hipDeviceProp_t* prop);
+static inline hipError_t hipChooseDevice(int* device, const hipDeviceProp_t* prop) {
+  return hipChooseDeviceR0600(device, prop);
+}
+
+#endif
+
 /**
  * @brief Returns the link type and hop count between two devices
  *
@@ -4285,26 +4435,10 @@ hipError_t hipDrvMemDiscardAndPrefetchBatchAsync(hipDeviceptr_t* dptrs, size_t* 
                                                  size_t* prefetchLocIdxs,
                                                  size_t numPrefetchLocs,
                                                  unsigned long long flags, hipStream_t stream);
-/**
- * @brief Advise about the usage of a given memory range to HIP.
- *
- * @param [in] dev_ptr  pointer to memory to set the advice for
- * @param [in] count    size in bytes of the memory range, it should be CPU page size alligned.
- * @param [in] advice   advice to be applied for the specified memory range
- * @param [in] device   device to apply the advice for
- *
- * @returns #hipSuccess, #hipErrorInvalidValue
- *
- * This HIP API advises about the usage to be applied on unified memory allocation in the
- * range starting from the pointer address devPtr, with the size of count bytes.
- * The memory range must refer to managed memory allocated via the API hipMallocManaged, and the
- * range will be handled with proper round down and round up respectively in the driver to
- * be aligned to CPU page size, the same way as corresponding CUDA API behaves in CUDA version 8.0
- * and afterwards.
- *
- * @note  This API is implemented on Linux and is under development on Microsoft Windows.
- */
-hipError_t hipMemAdvise(const void* dev_ptr, size_t count, hipMemoryAdvise advice, int device);
+
+// Deprecate since 800
+#if HIP_FORCE_API_VERSION < 800 || defined(HIP_ABI_IMPL)
+
 /**
  * @brief Advise about the usage of a given memory range to HIP.
  *
@@ -4326,6 +4460,60 @@ hipError_t hipMemAdvise(const void* dev_ptr, size_t count, hipMemoryAdvise advic
  */
 hipError_t hipMemAdvise_v2(const void* dev_ptr, size_t count, hipMemoryAdvise advice,
                            hipMemLocation location);
+
+/**
+ * @brief Advise about the usage of a given memory range to HIP.
+ *
+ * @param [in] dev_ptr  pointer to memory to set the advice for
+ * @param [in] count    size in bytes of the memory range, it should be CPU page size alligned.
+ * @param [in] advice   advice to be applied for the specified memory range
+ * @param [in] device   device to apply the advice for
+ *
+ * @returns #hipSuccess, #hipErrorInvalidValue
+ *
+ * This HIP API advises about the usage to be applied on unified memory allocation in the
+ * range starting from the pointer address devPtr, with the size of count bytes.
+ * The memory range must refer to managed memory allocated via the API hipMallocManaged, and the
+ * range will be handled with proper round down and round up respectively in the driver to
+ * be aligned to CPU page size, the same way as corresponding CUDA API behaves in CUDA version 8.0
+ * and afterwards.
+ *
+ * @note  This API is implemented on Linux and is under development on Microsoft Windows.
+ */
+hipError_t hipMemAdvise(const void* dev_ptr, size_t count, hipMemoryAdvise advice, int device);
+
+#else
+
+hipError_t hipMemAdvise_v2(const void* dev_ptr, size_t count, hipMemoryAdvise advice,
+                           hipMemLocation location);
+
+/**
+ * @brief Advise about the usage of a given memory range to HIP.
+ *
+ * @param [in] dev_ptr    pointer to memory to set the advice for
+ * @param [in] count      size in bytes of the memory range, it should be CPU page size alligned.
+ * @param [in] advice     advice to be applied for the specified memory range
+ * @param [in] location   location to apply the advice for
+ *
+ * @returns #hipSuccess, #hipErrorInvalidValue
+ *
+ * This HIP API advises about the usage to be applied on unified memory allocation in the
+ * range starting from the pointer address devPtr, with the size of count bytes.
+ * The memory range must refer to managed memory allocated via the API hipMallocManaged, and the
+ * range will be handled with proper round down and round up respectively in the driver to
+ * be aligned to CPU page size, the same way as corresponding CUDA API behaves in CUDA version 8.0
+ * and afterwards.
+ *
+ * @note  This API is implemented on Linux and is under development on Microsoft Windows.
+ * @note  Since 7.16, this API is an alias to the old hipMemAdvise_v2 API.
+ */
+static inline hipError_t hipMemAdvise(const void* dev_ptr, size_t count, hipMemoryAdvise advice,
+                        hipMemLocation location) {
+  return hipMemAdvise_v2(dev_ptr, count, advice, location);
+}
+
+#endif
+
 /**
  * @brief Query an attribute of a given memory range in HIP.
  *
@@ -10028,7 +10216,7 @@ hipError_t hipMemAddressReserve(void** ptr, size_t size, size_t alignment, void*
  * @param [in] prop - properties of the allocation.
  * @param [in] flags - currently unused, must be zero.
  * @returns #hipSuccess, #hipErrorInvalidValue, #hipErrorNotSupported
- * 
+ *
  * This API creates a memory allocation on the target device specified through the prop structure.
  * The prop allocation type must be specified as either #hipMemAllocationTypePinned or
  * #hipMemAllocationTypeUncached.
@@ -10327,6 +10515,7 @@ hipError_t hipExtDisableLogging();
  * @see hipExtEnableLogging, hipExtDisableLogging
  */
 hipError_t hipExtSetLoggingParams(size_t log_level, size_t log_size, size_t log_mask);
+
 /**
 * @}
 */
@@ -11078,7 +11267,6 @@ static inline hipError_t hipMallocManaged(T** devPtr, size_t size,
                                           unsigned int flags = hipMemAttachGlobal) {
   return hipMallocManaged((void**)devPtr, size, flags);
 }
-
 
 #endif
 #endif
