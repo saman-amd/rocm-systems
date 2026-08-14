@@ -335,11 +335,15 @@ union drm_amdgpu_ctx {
 /* vm ioctl */
 #define AMDGPU_VM_OP_RESERVE_VMID 1
 #define AMDGPU_VM_OP_UNRESERVE_VMID 2
+#define AMDGPU_VM_OP_GL2_PERSISTING_L2_CACHE 3
 
 struct drm_amdgpu_vm_in {
   /** AMDGPU_VM_OP_* */
   __u32 op;
-  __u32 flags;
+  union {
+    __u32 flags;
+    __u32 size;
+  };
 };
 
 struct drm_amdgpu_vm_out {
@@ -1194,6 +1198,7 @@ struct drm_amdgpu_info_device {
   __u32 csa_size;
   /* context save area base virtual alignment for gfx11 */
   __u32 csa_alignment;
+  __u32 persisting_gl2_cache_size_max;
 };
 
 struct drm_amdgpu_info_hw_ip {

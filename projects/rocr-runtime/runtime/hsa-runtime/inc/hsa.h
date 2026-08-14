@@ -1374,7 +1374,6 @@ hsa_status_t HSA_API hsa_agent_major_extension_supported(
 
 /** @} */
 
-
 /** \defgroup signals Signals
  *  @{
  */

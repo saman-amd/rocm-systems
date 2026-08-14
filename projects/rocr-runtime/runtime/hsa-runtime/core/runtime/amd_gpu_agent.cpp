@@ -646,6 +646,8 @@ void GpuAgent::InitCacheList() {
         cache_props_.erase(cache_props_.begin() + cache_id);
         --cache_id;
       }
+      if(cache_props_[cache_id].CacheLevel == 2 && cache_props_[cache_id].PersistingCacheSizeMax)
+          persisting_l2_cache_size_ = cache_props_[cache_id].PersistingCacheSizeMax;
     }
   }
 
@@ -2647,6 +2649,7 @@ hsa_status_t GpuAgent::GetInfo(hsa_agent_info_t attribute, void* value) const {
       static_cast<hsa_luid_t*>(value)->low = properties_.LuidLowPart;
       static_cast<hsa_luid_t*>(value)->high = properties_.LuidHighPart;
       break;
+    //TODO: BINCY remove
     case HSA_AMD_AGENT_INFO_HAS_EXPERT_SCHED_MODE: {
       // Requires KFD version >= 1.20 AND GFX major version >= 12
       auto kfd_version = core::Runtime::runtime_singleton_->KfdVersion().version;
@@ -2686,6 +2689,19 @@ hsa_status_t GpuAgent::GetInfo(hsa_agent_info_t attribute, void* value) const {
       // GPU agents can participate in host memory DMA-BUF export if the system supports virtual memory APIs
       *static_cast<bool*>(value) = core::Runtime::runtime_singleton_->VirtualMemApiSupported();
       break;
+  case HSA_AMD_AGENT_INFO_REQUEST_PERSISTING_L2_CACHE_SIZE:{
+        *((uint32_t*)value) = persisting_l2_cache_size_;
+        break;
+    }
+  case HSA_AMD_AGENT_INFO_MAX_PERSISTING_L2_CACHE_SIZE:{
+        for (auto& cache : cache_props_) {
+          if ((cache.CacheLevel == 2) && (cache.PersistingCacheSizeMax)) {
+                *((uint32_t*)value) = cache.PersistingCacheSizeMax;
+          }
+          return HSA_STATUS_SUCCESS;
+        }
+        break;
+      }
     default:
       return HSA_STATUS_ERROR_INVALID_ARGUMENT;
       break;
@@ -2693,6 +2709,25 @@ hsa_status_t GpuAgent::GetInfo(hsa_agent_info_t attribute, void* value) const {
   return HSA_STATUS_SUCCESS;
 }
 
+//TODO: Bincy remove
+hsa_status_t GpuAgent::SetAgentAttribute(hsa_agent_info_t attribute, void* value) {
+  const size_t attribute_u = static_cast<size_t>(attribute);
+
+  switch (attribute_u) {
+    case HSA_AMD_AGENT_ATTRIBUTE_REQUEST_PERSISTING_L2_CACHE_SIZE: {
+      uint64_t cacheSize = *((uint32_t*)value);
+      hsa_status_t status = driver().SetPersistingCacheSize(node_id(), &cacheSize);
+
+      if (status != HSA_STATUS_SUCCESS) return HSA_STATUS_ERROR_INVALID_ARGUMENT;
+      persisting_l2_cache_size_ = *((uint32_t*)value);
+      break;
+    }
+    default:
+      return HSA_STATUS_ERROR_INVALID_ARGUMENT;
+      break;
+  }
+  return HSA_STATUS_SUCCESS;
+}
 hsa_status_t GpuAgent::QueueCreate(size_t size, hsa_queue_type32_t queue_type, uint64_t flags,
                                    core::HsaEventCallback event_callback, void* data,
                                    uint32_t private_segment_size, uint32_t group_segment_size,

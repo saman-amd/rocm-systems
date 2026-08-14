@@ -734,7 +734,6 @@ hsa_status_t KfdDriver::SPMSetDestBuffer(uint32_t preferred_node_id, uint32_t si
 
   return HSA_STATUS_SUCCESS;
 }
-
 hsa_status_t KfdDriver::OpenSMI(uint32_t node_id, int* fd) const {
   if (HSAKMT_CALL(hsaKmtOpenSMI(node_id, fd)) != HSAKMT_STATUS_SUCCESS) {
     return HSA_STATUS_ERROR;
@@ -1038,6 +1037,15 @@ hsa_status_t KfdDriver::CheckAcceleratorReadiness(core::Agent& agent, bool* read
     *ready = false;
   }
 
+  return HSA_STATUS_SUCCESS;
+}
+
+
+hsa_status_t KfdDriver::SetPersistingCacheSize(uint32_t node_id, uint64_t* available_size) {
+  assert(available_size);
+
+  if (hsaKmtSetPersistingCacheSize(node_id, *available_size) != HSAKMT_STATUS_SUCCESS)
+    return HSA_STATUS_ERROR;
   return HSA_STATUS_SUCCESS;
 }
 

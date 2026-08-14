@@ -284,6 +284,35 @@ HSAKMT_STATUS HSAKMTAPI hsaKmtRegisterMemoryCtx(HsaKFDContext *ctx,
 				   NULL, 0, flags);
 }
 
+//TODO: BINCY Changes remove
+
+// Example: Configure GL2 cache persistence
+HSAKMT_STATUS HSAKMTAPI hsaKmtSetPersistingCacheSizeCtx(HsaKFDContext *ctx,
+												HSAuint32 Node,
+												HSAuint64 CacheSize) {
+    union drm_amdgpu_vm args = {0};
+	HSAuint32 gpu_id;
+	HSAKMT_STATUS result;
+
+	CHECK_KFD_OPEN();
+	CHECK_KFD_MINOR_VERSION(9);
+
+    args.in.op = AMDGPU_VM_OP_GL2_PERSISTING_L2_CACHE;
+    args.in.size = CacheSize;
+		pr_debug("[%s] node %d\n", __func__, Node);
+
+	result = hsakmt_validate_nodeid(ctx, Node, &gpu_id);
+	if (result != HSAKMT_STATUS_SUCCESS) {
+		pr_err("[%s] invalid node ID: %d\n", __func__, Node);
+		return result;
+	}
+    if (hsakmt_ioctl(ctx->fd, AMDKFD_IOC_AVAILABLE_MEMORY, &args))
+		return HSAKMT_STATUS_ERROR;
+
+    printf("L2 cache persistence configured: %lu bytes\n", CacheSize);
+    return 0;
+}
+
 HSAKMT_STATUS HSAKMTAPI hsaKmtRegisterMemoryToNodesCtx(HsaKFDContext *ctx,
 						    void *MemoryAddress,
 						    HSAuint64 MemorySizeInBytes,
@@ -933,6 +962,12 @@ HSAKMT_STATUS HSAKMTAPI hsaKmtGetAMDGPUDeviceHandle(HSAuint32 NodeId,
 	CHECK_KFD_OPEN();
 
 	return hsaKmtGetAMDGPUDeviceHandleCtx(&hsakmt_primary_kfd_ctx, NodeId, DeviceHandle);
+}
+//TODO:BINCY remove
+HSAKMT_STATUS HSAKMTAPI hsaKmtSetPersistingCacheSize(HSAuint32 Node,
+												HSAuint64 CacheSize)
+{
+	return hsaKmtSetPersistingCacheSizeCtx(&hsakmt_primary_kfd_ctx, Node, CacheSize);
 }
 
 HSAKMT_STATUS HSAKMTAPI hsaKmtHandleExport(const HsaHandleExportDesc* desc,
