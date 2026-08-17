@@ -18,6 +18,7 @@
 #include "io.h"
 #include "masyncmonitor.h"
 #include "mbuffer.h"
+#include "mconfiguration.h"
 #include "mfile.h"
 #include "mhip.h"
 #include "mstate.h"
@@ -166,7 +167,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_new_uses_pinned_host_memory)
     EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
 }
 
 TEST_F(HipFileAsyncOp, AsyncOpFallbackLimitsMaxIoSize)
@@ -183,7 +184,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallbackLimitsMaxIoSize)
     EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
     ASSERT_EQ(op->submitted_size, hipFile::getMaxRwCount());
 }
 
@@ -197,7 +198,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_new_failure_throws_bad_alloc)
     EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Throw(Hip::RuntimeError(hipErrorOutOfMemory)));
     EXPECT_THROW(std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{IoType::Read, file, buffer, stream,
                                                                       &size, &file_offset, &buffer_offset,
-                                                                      &bytes_transferred}),
+                                                                      1_MiB, &bytes_transferred}),
                  std::bad_alloc);
 }
 
@@ -214,7 +215,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_bounce_alloc_failure_throws)
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     EXPECT_THROW(std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{IoType::Read, file, buffer, stream,
                                                                       &size, &file_offset, &buffer_offset,
-                                                                      &bytes_transferred}),
+                                                                      1_MiB, &bytes_transferred}),
                  Hip::RuntimeError);
 }
 
@@ -233,7 +234,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_bounce_buffer_deleter_failure_calls_syslo
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     EXPECT_CALL(msys, syslog);
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
 }
 
 TEST_F(HipFileAsyncOp, AsyncOpFallback_delete_failure_calls_syslog)
@@ -251,7 +252,7 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_delete_failure_calls_syslog)
         .WillOnce(Throw(Hip::RuntimeError(hipErrorInvalidValue)));
     EXPECT_CALL(msys, syslog);
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
 }
 
 struct HipFileAsyncOpFallbackMethods : public HipFileAsyncOp {
@@ -262,7 +263,7 @@ struct HipFileAsyncOpFallbackMethods : public HipFileAsyncOp {
         EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(bounce_buffer.get()));
         EXPECT_CALL(mhip, hipHostGetDevicePointer).WillOnce(Return(bounce_buffer_dev_ptr));
         op = std::make_shared<AsyncOpFallback>(IoType::Read, file, buffer, stream, &size, &file_offset,
-                                               &buffer_offset, &bytes_transferred);
+                                               &buffer_offset, 1_MiB, &bytes_transferred);
     }
     ~HipFileAsyncOpFallbackMethods() override
     {
@@ -419,6 +420,7 @@ struct FallbackAsyncIO : public HipFileOpened, public ::testing::WithParamInterf
     {
         io_type = GetParam();
     }
+    StrictMock<MConfiguration>           mconfig;
     StrictMock<MHip>                     mhip;
     StrictMock<MSys>                     msys;
     std::shared_ptr<StrictMock<MFile>>   mfile;
@@ -506,6 +508,7 @@ TEST_P(FallbackAsyncIO, attemptToQueueCleanupOnStreamSubmissionFailure)
     auto bounce_buffer = malloc(size);
     // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
     ASSERT_NE(bounce_buffer, nullptr);
+    EXPECT_CALL(mconfig, asyncBufferSize).WillOnce(Return(size));
     EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data)).WillOnce(Return(bounce_buffer));
     EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer), _))
         .WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
@@ -555,8 +558,9 @@ struct AsyncIoOp : public ::testing::Test {
         EXPECT_CALL(*mstream, fixedIOSize).Times(AnyNumber()).WillRepeatedly(Return(fixed_io_size));
         EXPECT_CALL(*mstream, pageAligned).Times(AnyNumber()).WillRepeatedly(Return(true));
         EXPECT_CALL(*mbuffer, getBuffer);
-        op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(
-            io_type, mfile, mbuffer, mstream, &size, &file_offset, &buffer_offset, &bytes_transferred));
+        op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(io_type, mfile, mbuffer, mstream, &size,
+                                                                  &file_offset, &buffer_offset, 1_MiB,
+                                                                  &bytes_transferred));
     }
     StrictMock<MHip>                     mhip;
     StrictMock<MSys>                     msys;
@@ -677,11 +681,12 @@ TEST_P(AsyncIoOpWithParams, cpuIOReturnsFullSize)
         EXPECT_CALL(msys, pread).WillOnce(Return(size));
     }
     else {
+        op->chunk_bytes_copied = size;
         EXPECT_CALL(msys, pwrite).WillOnce(Return(size));
     }
     EXPECT_CALL(*mfile, bufferedFd);
     async_io_cpu_copy(op.get());
-    ASSERT_EQ(op->bytes_transferred_internal, size);
+    ASSERT_EQ(op->chunk_bytes_copied, size);
 }
 
 TEST_P(AsyncIoOpWithParams, cpuCopyReadPreadPwriteErrorReturnsError)
@@ -690,6 +695,7 @@ TEST_P(AsyncIoOpWithParams, cpuCopyReadPreadPwriteErrorReturnsError)
         EXPECT_CALL(msys, pread).WillOnce(Throw(std::system_error(3, std::generic_category())));
     }
     else {
+        op->chunk_bytes_copied = size;
         EXPECT_CALL(msys, pwrite).WillOnce(Throw(std::system_error(3, std::generic_category())));
     }
     EXPECT_CALL(*mfile, bufferedFd);
@@ -705,6 +711,7 @@ TEST_P(AsyncIoOpWithParams, cpuCopyReadPreadPwriteRetriesOnEINTR)
             .WillOnce(Return(size));
     }
     else {
+        op->chunk_bytes_copied = size;
         EXPECT_CALL(msys, pwrite)
             .WillOnce(Throw(std::system_error(EINTR, std::generic_category())))
             .WillOnce(Return(size));
@@ -712,7 +719,7 @@ TEST_P(AsyncIoOpWithParams, cpuCopyReadPreadPwriteRetriesOnEINTR)
     EXPECT_CALL(*mfile, bufferedFd).Times(2);
     async_io_cpu_copy(op.get());
 
-    ASSERT_EQ(op->bytes_transferred_internal, size);
+    ASSERT_EQ(op->chunk_bytes_copied, size);
 }
 
 INSTANTIATE_TEST_SUITE_P(AsyncIoOpWithParamsSuite, AsyncIoOpWithParams,
