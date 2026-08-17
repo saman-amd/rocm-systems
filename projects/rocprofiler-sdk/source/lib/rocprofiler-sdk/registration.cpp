@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,7 @@
 #include "lib/rocprofiler-sdk/code_object/code_object.hpp"
 #include "lib/rocprofiler-sdk/context/context.hpp"
 #include "lib/rocprofiler-sdk/context/correlation_id.hpp"
+#include "lib/rocprofiler-sdk/hip/event.hpp"
 #include "lib/rocprofiler-sdk/hip/graph.hpp"
 #include "lib/rocprofiler-sdk/hip/hip.hpp"
 #include "lib/rocprofiler-sdk/hip/stream.hpp"
@@ -1185,6 +1186,7 @@ rocprofiler_set_api_table(const char* name,
         // copy or else those modifications will be lost when HIP API tracing is enabled
         // because the HIP API tracing invokes the function pointers from the copy below
         rocprofiler::hip::graph::update_table(hip_runtime_api_table);
+        rocprofiler::hip::event::update_table(hip_runtime_api_table);
 
         rocprofiler::hip::copy_table(hip_runtime_api_table, lib_instance);
 
