@@ -1230,6 +1230,30 @@ bool VirtualGPU::processMemObjects(const amd::Kernel& kernel, const_address para
 }
 
 // ================================================================================================
+// Streams outnumber hardware queues, so several VirtualGPUs end up multiplexed onto one physical
+// AQL ring, and hsa_queue_add_write_index_screlease() reserves a slot and advances the GPU-visible
+// write_dispatch_id in one step. The ring therefore advertises slots whose packets are still being
+// written, and CPF is sent to fetch one either by a doorbell from a producer holding a later slot
+// or by an HWS queue remap that re-reads write_dispatch_id. Reserving and publishing separately
+// closes both entry points, since the index only ever names fully written packets:
+//
+//   RPTR = WPTR = 0
+//   T1 claims slot 0                           (write_dispatch_id -> 1)
+//   T2 claims slot 1                           (write_dispatch_id -> 2)
+//   T2 fills slot 1 and rings doorbell(1)
+//   CPF fetches slot 0, MEC sees an INVALID header and discards the ROQ    // defined behavior
+//   CPF re-fetches slot 0, but the 64B fetch is split into smaller reads somewhere on the way
+//   the read of the last 32B returns first, carrying junk from the previous trip through the ring
+//   T1 writes the body of slot 0, then releases its header
+//   the read of the first 32B returns, carrying the header T1 just wrote
+//   CPF assembles 64B that is half junk and half fresh, and the fresh half is a valid header, so
+//   MEC runs the packet with the junk body
+//
+// "INVALID header -> discard the ROQ" only covers the first look; on the re-fetch the header is
+// valid by the time it arrives, so nothing catches the torn packet. CPF asks for the packet as one
+// 64B unit and a fetch that stayed 64B would be a consistent snapshot; on Intel hosts it does not
+// appear to stay 64B, which is why this has only been seen there and why the ordering is gated on
+// the host vendor.
 void VirtualGPU::SetGpuQueue(hsa_queue_t* queue) {
   if (gpu_queue_ != queue) {
     last_aql_packet_slot_ = kInvalidAqlSlot;
@@ -1250,6 +1274,7 @@ void VirtualGPU::SetGpuQueue(hsa_queue_t* queue) {
     use_movdir64b_ = roc_device_.info().movdir64b_ && device_mem_ring_buf_;
     doorbell_ptr_ = extras.doorbellPtr;
     largest_aql_barrier_bit_slot_ = extras.largestAqlBarrierBitSlot;
+    aql_ordered_publish_state_ = extras.aqlPublishState;
     metadata_preloader_.SetQueueBase(extras.metadataRingBuffer,
                                      roc_device_.MetadataVersionHeader());
   } else {
@@ -1257,6 +1282,7 @@ void VirtualGPU::SetGpuQueue(hsa_queue_t* queue) {
     use_movdir64b_ = false;
     doorbell_ptr_ = nullptr;
     largest_aql_barrier_bit_slot_.reset();
+    aql_ordered_publish_state_ = nullptr;
     metadata_preloader_.SetQueueBase(nullptr, roc_device_.MetadataVersionHeader());
   }
 }
@@ -1317,7 +1343,7 @@ static inline void packet_store_release(uint32_t* packet, uint16_t header, uint1
 std::string VirtualGPU::AnalyzeAqlQueue() const {
   std::string kernelName = "<not identified>";
   const uint32_t queueMask = gpu_queue_->size - 1;
-  const uint64_t index = Hsa::queue_load_write_index_relaxed(gpu_queue_);
+  const uint64_t index = AqlReserveIndex();
   const uint64_t read = Hsa::queue_load_read_index_relaxed(gpu_queue_);
 
   if (index <= read) {
@@ -1432,8 +1458,47 @@ AqlSlotReservation VirtualGPU::ReserveAqlSlots(size_t packet_count) {
 
   const uint64_t barrier_bit_slot_before_reservation =
       largest_aql_barrier_bit_slot_->load(std::memory_order_acquire);
-  const uint64_t start_slot = Hsa::queue_add_write_index_screlease(gpu_queue_, packet_count);
+  const uint64_t start_slot = aql_ordered_publish_state_
+                                  ? aql_ordered_publish_state_->Reserve(packet_count)
+                                  : Hsa::queue_add_write_index_screlease(gpu_queue_, packet_count);
   return {start_slot, packet_count, barrier_bit_slot_before_reservation};
+}
+
+// ================================================================================================
+void VirtualGPU::CommitAqlSlots(const AqlSlotReservation& reservation, size_t packet_offset,
+                                size_t packet_count, bool ring_doorbell) {
+  assert(packet_count > 0);
+  assert(packet_offset + packet_count <= reservation.packet_count);
+
+  const uint64_t commit_start = reservation.start_slot + packet_offset;
+  const uint64_t commit_end = commit_start + packet_count;
+  if (!aql_ordered_publish_state_) {
+    if (ring_doorbell) {
+      ringQueueDoorbell(commit_end - 1);
+    }
+    return;
+  }
+
+  // @note: an earlier producer holding a large reservation can keep this thread spinning for as
+  //        long as it takes to write all of its packets. If that ever costs a core, back off
+  //        exponentially instead of spinning.
+  while (aql_ordered_publish_state_->CommitIndex() != commit_start) {
+    amd::Os::spinPause();
+  }
+
+  // Drain this packet's header from the WC buffer before the write index exposes the slot.
+  amd::nontemporalStoreFence();
+  Hsa::queue_store_write_index_screlease(gpu_queue_, commit_end);
+  if (ring_doorbell) {
+    ringQueueDoorbell(commit_end - 1);
+  }
+  aql_ordered_publish_state_->CompleteCommit(commit_end);
+}
+
+// ================================================================================================
+uint64_t VirtualGPU::AqlReserveIndex() const {
+  return aql_ordered_publish_state_ ? aql_ordered_publish_state_->ReserveIndex()
+                                    : Hsa::queue_load_write_index_relaxed(gpu_queue_);
 }
 
 // ================================================================================================
@@ -1549,8 +1614,8 @@ bool VirtualGPU::dispatchGenericAqlPacket(AqlPacket* packet, uint16_t header, ui
   bool ring_for_non_profiler_signal = attach_signal && (packet->completion_signal.handle != 0);
   bool ring_doorbell = IS_LINUX || dev().IsPm4Emulation() || blocking ||
                        (skippedDispatches_ >= skip_limit) || ring_for_non_profiler_signal;
+  CommitAqlSlots(reservation, 0, 1, ring_doorbell);
   if (ring_doorbell) {
-    ringQueueDoorbell(index);
     skippedDispatches_ = 0;
   } else {
     ++skippedDispatches_;
@@ -2015,11 +2080,7 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const amd::AlignedVector64<uint8_t>&
       }
     }
 
-    if (doorbell_ptr_) {
-      amd::ringDoorbell(doorbell_ptr_, startIndex + chunkEnd - 1);
-    } else {
-      Hsa::signal_store_screlease(gpu_queue_->doorbell_signal, startIndex + chunkEnd - 1);
-    }
+    CommitAqlSlots(reservation, chunkStart, thisChunk, true);
 
     chunkStart = chunkEnd;
   }
@@ -2130,7 +2191,7 @@ void VirtualGPU::dispatchBarrierPacket(uint16_t packetHeader, bool skipSignal,
       &(reinterpret_cast<hsa_barrier_and_packet_t*>(gpu_queue_->base_address))[index & queueMask];
 
   writePacketToRingBuffer(aql_loc, &barrier_packet_, packetHeader, uint16_t{0}, index & queueMask);
-  ringQueueDoorbell(index);
+  CommitAqlSlots(reservation, 0, 1, true);
   if (IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL)) {
     logAqlBarrierPacket(roc_device_, gpu_queue_, packetHeader, &barrier_packet_, index, priority_);
   }
@@ -2212,7 +2273,7 @@ void VirtualGPU::dispatchBarrierValuePacket(uint16_t packetHeader, bool resolveD
   hsa_amd_barrier_value_packet_t* aql_loc = &(reinterpret_cast<hsa_amd_barrier_value_packet_t*>(
       gpu_queue_->base_address))[index & queueMask];
   writePacketToRingBuffer(aql_loc, &barrier_value_packet_, packetHeader, rest, index & queueMask);
-  ringQueueDoorbell(index);
+  CommitAqlSlots(reservation, 0, 1, true);
 
   if (IsLogEnabled(amd::LOG_DETAIL_DEBUG, amd::LOG_AQL)) {
     logAqlBarrierValuePacket(roc_device_, gpu_queue_, packetHeader, &barrier_value_packet_, index,

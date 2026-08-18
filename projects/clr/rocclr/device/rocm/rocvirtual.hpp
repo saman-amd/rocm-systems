@@ -26,6 +26,7 @@
 #include <vector>
 
 namespace amd::roc {
+struct AqlOrderedPublishState;
 class Device;
 class Memory;
 struct ProfilingSignal;
@@ -765,6 +766,15 @@ class VirtualGPU : public device::VirtualDevice {
   //! Snapshot shared barrier state before atomically reserving AQL queue slots.
   AqlSlotReservation ReserveAqlSlots(size_t packet_count);
 
+  //! Publish a contiguous part of a reservation in global reservation order. Every reserved slot
+  //! must be published: an abandoned reservation stalls every stream sharing the HW queue.
+  void CommitAqlSlots(const AqlSlotReservation& reservation, size_t packet_offset,
+                      size_t packet_count, bool ring_doorbell);
+
+  //! First slot the next reservation will use. It runs ahead of the hardware write index while
+  //! other streams still have packets in flight.
+  uint64_t AqlReserveIndex() const;
+
   //! Clear a caller-requested barrier when prior queue state already preserves stream ordering.
   void OptimizeStreamOrderingBarrier(uint16_t& header,
                                      const AqlSlotReservation& reservation) const;
@@ -897,6 +907,9 @@ class VirtualGPU : public device::VirtualDevice {
   void* last_barrier_hw_event_ = nullptr;
   hsa_agent_t gpu_device_;  //!< Physical device
   hsa_queue_t* gpu_queue_;                //!< Active queue associated with a vgpu
+  //! Reservation and ordered commit state shared by all VirtualGPUs on this pooled HW queue.
+  //! Owned by the queue pool, which outlives every VirtualGPU bound to the queue.
+  AqlOrderedPublishState* aql_ordered_publish_state_ = nullptr;
   bool device_mem_ring_buf_ = false;           //!< Queue ring buffer is in device memory
   bool use_movdir64b_ = false;                 //!< Use MOVDIR64B for AQL packet writes
   //! Cached hardware doorbell for the active queue (UC MMIO). Non-null only when

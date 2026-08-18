@@ -58,6 +58,27 @@ class Resource;
 class VirtualDevice;
 class PrintfDbg;
 
+//! Per-ring AQL slot reservation and ordered publication state.
+struct alignas(64) AqlOrderedPublishState {
+  //! Allocate slots without advancing the GPU-visible write index.
+  uint64_t Reserve(uint64_t packet_count) {
+    return reserve_index_.fetch_add(packet_count, std::memory_order_relaxed);
+  }
+
+  uint64_t ReserveIndex() const { return reserve_index_.load(std::memory_order_relaxed); }
+
+  uint64_t CommitIndex() const { return commit_index_.load(std::memory_order_acquire); }
+
+  //! Allow the next reservation to publish after this doorbell operation completes.
+  void CompleteCommit(uint64_t next_commit_index) {
+    commit_index_.store(next_commit_index, std::memory_order_release);
+  }
+
+ private:
+  alignas(64) std::atomic<uint64_t> reserve_index_{0};
+  alignas(64) std::atomic<uint64_t> commit_index_{0};
+};
+
 class ProfilingSignal : public amd::ReferenceCountedObject {
  public:
   //! Sentinel for queue_index_ when the owning stream is unknown.
@@ -603,6 +624,10 @@ class Device : public NullDevice {
     bool deviceMemRingBuf = false;
     //! Largest barrier-bit slot shared by every VirtualGPU using this physical queue.
     std::shared_ptr<std::atomic<uint64_t>> largestAqlBarrierBitSlot;
+    //! Ordered publication state shared by every VirtualGPU using this physical queue. Owned by
+    //! the queue pool entry, which outlives every VirtualGPU bound to the queue.
+    //! Null when ordered publication is disabled, which selects the plain HSA reserve path.
+    AqlOrderedPublishState* aqlPublishState = nullptr;
   };
 
   //! Acquire HSA queue. This method can create a new HSA queue or
@@ -774,20 +799,25 @@ class Device : public NullDevice {
   struct QueueInfo {
     int refCount;             //! Reference counter. Shows how many time the queue was shared
     bool hasDedicatedQueue_;  //! True if this queue is a dedicated queue (e.g., null stream)
+    //! Ordered publication state shared by every VirtualGPU using this physical queue.
+    AqlOrderedPublishState aqlPublishState_;
 
     // Constructor
     QueueInfo() : refCount(0), hasDedicatedQueue_(false) {}
 
-    //! Get the current hardware queue depth (wptr - rptr)
-    static uint64_t GetHwQueueDepth(hsa_queue_t* queue) {
-      uint64_t wptr = Hsa::queue_load_write_index_relaxed(queue);
-      uint64_t rptr = Hsa::queue_load_read_index_relaxed(queue);
-      return wptr - rptr;
+    //! Get the current queue depth. With ordered publication this counts reserved slots, which
+    //! run ahead of the slots the GPU can already see, so a queue is never picked twice for work
+    //! that is still being written.
+    uint64_t GetHwQueueDepth(hsa_queue_t* queue, bool ordered_publish) const {
+      const uint64_t write_index = ordered_publish ? aqlPublishState_.ReserveIndex()
+                                                   : Hsa::queue_load_write_index_relaxed(queue);
+      const uint64_t read_index = Hsa::queue_load_read_index_relaxed(queue);
+      return write_index - read_index;
     }
 
     //! Get a combined metric for queue selection (lower is better)
-    uint64_t GetLoadMetric(hsa_queue_t* queue, uint32_t mode = 1) const {
-      auto depth = GetHwQueueDepth(queue);
+    uint64_t GetLoadMetric(hsa_queue_t* queue, bool ordered_publish, uint32_t mode = 1) const {
+      auto depth = GetHwQueueDepth(queue, ordered_publish);
 
       // Dedicated queue penalty: prefer regular queues, but use dedicated if regular queues
       // have depth > ~128 packets. Penalty = 128 << 4 = 2048.

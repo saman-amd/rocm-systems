@@ -1784,11 +1784,17 @@ bool Device::populateOCLDeviceConstants() {
 
   ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Gfx Major/Minor/Stepping: %d/%d/%d, Device ID: 0x%x",
           isa().versionMajor(), isa().versionMinor(), isa().versionStepping(), pciDeviceId_);
-  ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Using dev kernel arg wa = %d", settings().kernel_arg_impl_);
+  ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Device kernel args: %d, kernel arg readback wa: %d",
+          settings().kernel_arg_impl_ != Settings::HostKernelArgs,
+          settings().kernel_arg_impl_ == Settings::DeviceKernelArgsReadback);
+  ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Global mem cacheline size: %u",
+          info_.globalMemCacheLineSize_);
   ClPrint(amd::LOG_INFO, amd::LOG_INIT, "HMM support: %d, XNACK: %d, Direct host access: %d",
           info_.hmmSupported_, info_.hmmCpuMemoryAccessible_, info_.hmmDirectHostAccess_);
   ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Max SDMA Read Mask: 0x%x, Max SDMA Write Mask: 0x%x",
           maxSdmaReadMask_, maxSdmaWriteMask_);
+  ClPrint(amd::LOG_INFO, amd::LOG_INIT, "Ordered doorbell: %d, Max HW queues: %u",
+          settings().isOrderedDoorbell_, settings().max_hw_queues_);
 
   info_.globalCUMask_ = {};
 
@@ -3288,11 +3294,12 @@ hsa_queue_t* Device::getQueueFromPool(const uint qIndex, bool force_reuse,
     // gfx9XX pipe distribution: queues map to pipes via queue_id % num_pipes
     const bool pipe_dist = settings().queue_pipe_dist_;
     const uint32_t num_pipes = numHwPipes_;
+    const bool ordered_publish = settings().isOrderedDoorbell_;
 
     lowest = std::min_element(
         queuePool_[qIndex].begin(), queuePool_[qIndex].end(),
-        [mode, pipe_dist, num_pipes, excluded_ids](PoolRef first_candidate,
-                                                   PoolRef second_candidate) {
+        [mode, pipe_dist, num_pipes, excluded_ids, ordered_publish](PoolRef first_candidate,
+                                                                    PoolRef second_candidate) {
           // Exclusion filtering: prefer non-excluded queues over excluded ones
           bool first_is_excluded =
               excluded_ids && excluded_ids->count(first_candidate.first->id) > 0;
@@ -3315,9 +3322,10 @@ hsa_queue_t* Device::getQueueFromPool(const uint qIndex, bool force_reuse,
             // Mode 1+: Advanced weighted metric with dedicated queue penalty
             // Metric = dedicated_queue_penalty + (depth << 4) + refCount
             uint64_t first_metric =
-                first_candidate.second.GetLoadMetric(first_candidate.first, mode);
+                first_candidate.second.GetLoadMetric(first_candidate.first, ordered_publish, mode);
             uint64_t second_metric =
-                second_candidate.second.GetLoadMetric(second_candidate.first, mode);
+                second_candidate.second.GetLoadMetric(second_candidate.first, ordered_publish,
+                                                      mode);
 
             if (first_metric == second_metric && pipe_dist) {
               // gfx9XX pipe distribution: prefer lower pipe IDs for consistent distribution
@@ -3333,15 +3341,14 @@ hsa_queue_t* Device::getQueueFromPool(const uint qIndex, bool force_reuse,
         });
 
     lowest->second.refCount++;
-    ClPrint(amd::LOG_INFO, amd::LOG_QUEUE,
-            "Selected queue (mode=%u): %p refCount: %d, depth: %lu, metric: %lu, pipe: %d%s%s",
-            mode, lowest->first->base_address, lowest->second.refCount,
-            QueueInfo::GetHwQueueDepth(lowest->first),
-            lowest->second.GetLoadMetric(lowest->first, mode),
-            pipe_dist ? (lowest->first->id % num_pipes) : -1,
-            force_reuse ? " (forced)" : "",
-            (excluded_ids && excluded_ids->count(lowest->first->id) > 0)
-                ? " (excluded-fallback)" : "");
+    ClPrint(
+        amd::LOG_INFO, amd::LOG_QUEUE,
+        "Selected queue (mode=%u): %p refCount: %d, depth: %lu, metric: %lu, pipe: %d%s%s", mode,
+        lowest->first->base_address, lowest->second.refCount,
+        lowest->second.GetHwQueueDepth(lowest->first, ordered_publish),
+        lowest->second.GetLoadMetric(lowest->first, ordered_publish, mode),
+        pipe_dist ? (lowest->first->id % num_pipes) : -1, force_reuse ? " (forced)" : "",
+        (excluded_ids && excluded_ids->count(lowest->first->id) > 0) ? " (excluded-fallback)" : "");
     return lowest->first;
   }
   return nullptr;
@@ -3600,12 +3607,18 @@ hsa_queue_t* Device::acquireQueue(uint32_t queue_size_hint, bool coop_queue,
 
   // Add queue to the pool (including dedicated queues)
   amd::ScopedLock l(active_queue_access_);
-  auto result = queuePool_[qIndex].emplace(std::make_pair(queue, QueueInfo()));
+  auto result = queuePool_[qIndex].try_emplace(queue);
   assert(result.second && "QueueInfo already exists");
   auto& qInfo = result.first->second;
   qInfo.refCount = 1;
   qInfo.hasDedicatedQueue_ = dedicated_queue;
   populateExtras();
+  // Only the queues in this pool can be shared by several VirtualGPUs, so they are the only ones
+  // that need their publication ordered. CU masked queues live in their own pool and cooperative
+  // queues are never pooled, so both keep the plain HSA path.
+  if (settings().isOrderedDoorbell_) {
+    queue_extras_[queue].aqlPublishState = &qInfo.aqlPublishState_;
+  }
   ClPrint(amd::LOG_INFO, amd::LOG_QUEUE, "acquireQueue refCount: %p (%d) %s",
           result.first->first->base_address, result.first->second.refCount,
           dedicated_queue ? "(dedicated)" : "");
