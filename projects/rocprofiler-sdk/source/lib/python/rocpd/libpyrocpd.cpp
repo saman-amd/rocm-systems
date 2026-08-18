@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+// Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All Rights Reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -545,6 +545,9 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                         auto counters = rocpd::sql_generator<rocpd::types::counter>{
                             conn, select_guid_nid_pid("counters_collection")};
 
+                        auto hip_events = rocpd::sql_generator<rocpd::types::hip_events>{
+                            conn, select_guid_nid_pid("hip_events")};
+
                         auto regions = rocpd::sql_generator<rocpd::types::region>{
                             conn, select_guid_nid_pid("regions"), region_order_by};
 
@@ -580,7 +583,8 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                                                       graph_launches,
                                                       scratch_memory,
                                                       memory_allocations,
-                                                      counters);
+                                                      counters,
+                                                      hip_events);
                     }
                 }
             }
