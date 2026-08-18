@@ -1,5 +1,6 @@
 /*************************************************************************
  * Copyright (c) 2015-2019, NVIDIA CORPORATION. All rights reserved.
+ * Modifications Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -366,9 +367,6 @@ __hidden ncclResult_t pluginGetCollInfo(void* context, ncclFunc_t collType, size
                      "TUNER/ExamplePlugin: pluginGetCollInfo called - collType=%s, nBytes=%zu, numPipeOps=%d, regBuff=%d, numConfigs=%d",
                      collTypeToString(collType), nBytes, numPipeOps, regBuff, ctx->numConfigs);
   }
-
-  // Cast the collCostTable pointer to a 2D array to fix the segmentation fault
-  float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
 
   // Look for matching configuration
   for (int i = 0; i < ctx->numConfigs; i++) {
