@@ -19,6 +19,7 @@
 #include "net.h"
 #include "rccl_common.h"
 #include "rocmwrap.h"
+#include "rccl_float8.h"
 
 namespace RcclUnitTesting
 {
@@ -1676,6 +1677,37 @@ TEST(Rcclwrap, RcclHierarchicalTempBufferSizeTests)
     EXPECT_EQ(rcclHierarchicalTempBufferSize(15, false, true), HALF);
     EXPECT_EQ(rcclHierarchicalTempBufferSize(16, false, true), FULL);
     EXPECT_EQ(rcclHierarchicalTempBufferSize(32, false, true), FULL);
+}
+
+TEST(Rcclwrap, RcclPackPremulSumImmediateFp8Tests)
+{
+#if !defined(RCCL_FLOAT8)
+    GTEST_SKIP() << "RCCL_FLOAT8 not enabled";
+#else
+    // AICOMRCCL-1945: host packed 1/nRanks as OCP rccl_float8 while gfx942
+    // device code decoded FNUZ. Store IEEE float bits instead.
+    for(int nRanks : {2, 4, 8, 16})
+    {
+        const float    scale  = float(1.0 / nRanks);
+        const uint64_t packed = rcclPackPremulSumImmediateFromFloat(scale);
+        uint64_t       asFloat = 0;
+        std::memcpy(&asFloat, &scale, sizeof(float));
+        EXPECT_EQ(packed, asFloat) << "nRanks=" << nRanks;
+
+        rccl_float8 f8(scale);
+        uint64_t    asFp8 = 0;
+        std::memcpy(&asFp8, &f8, sizeof(rccl_float8));
+        EXPECT_NE(packed, asFp8) << "must not store host rccl_float8 bits nRanks=" << nRanks;
+    }
+
+    const float userScale = 0.25f;
+    rccl_float8 userF8(userScale);
+    EXPECT_EQ(rcclPackPremulSumImmediateFromHostScalar(ncclFloat8e4m3, &userF8),
+              rcclPackPremulSumImmediateFromFloat((float)userF8));
+    rccl_bfloat8 userBf8(userScale);
+    EXPECT_EQ(rcclPackPremulSumImmediateFromHostScalar(ncclFloat8e5m2, &userBf8),
+              rcclPackPremulSumImmediateFromFloat((float)userBf8));
+#endif
 }
 
 TEST(Rcclwrap, RcclHierarchicalAlgoInfoTests)

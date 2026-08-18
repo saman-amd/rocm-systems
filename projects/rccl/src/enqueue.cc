@@ -3164,12 +3164,11 @@ static ncclResult_t hostToDevRedOp(ncclDevRedOpFull* opFull, ncclRedOp_t op, ncc
       break;
 #if defined(RCCL_FLOAT8)
     case ncclFloat8e4m3:
-      opFull->op = ncclDevPreMulSum;
-      f8 = static_cast<rccl_float8>(float(1.0 / comm->nRanks));
-      break;
     case ncclFloat8e5m2:
+      // Pack 1/nRanks as float. Device FuncPreMulSum for fp8 reduces in float,
+      // and host vs gfx942-device rccl_float8 encodings differ (OCP vs FNUZ).
       opFull->op = ncclDevPreMulSum;
-      bf8 = static_cast<rccl_bfloat8>(float(1.0 / comm->nRanks));
+      u64 = rcclPackPremulSumImmediateFromFloat(float(1.0 / comm->nRanks));
       break;
 #endif
     case ncclFloat16:
@@ -4025,7 +4024,7 @@ ncclResult_t ncclRedOpCreatePreMulSum_impl(ncclRedOp_t* op, void* scalar, ncclDa
     int size = ncclTypeSize(datatype);
     if (size < 1) return ncclInternalError;
     user->opFull.scalarArgIsPtr = false;
-    std::memcpy(&user->opFull.scalarArg, scalar, size);
+    user->opFull.scalarArg = rcclPackPremulSumImmediateFromHostScalar(datatype, scalar);
   } else {
     user->opFull.scalarArgIsPtr = true;
     user->opFull.scalarArg = reinterpret_cast<uint64_t>(scalar);

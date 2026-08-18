@@ -671,6 +671,36 @@ struct FuncPreMulSum<__nv_fp8_e5m2> {
 };
 #else
 template <>
+struct RedOpArg<FuncPreMulSum<rccl_float8>> {
+  static constexpr bool ArgUsed = true;
+  // Pointer scalars are fp8 in user memory; promote to float so the constructor
+  // matches host immediate packing (AICOMRCCL-1945).
+  __device__ __forceinline__ static uint64_t loadArg(void* ptr) {
+    union {
+      uint64_t u64;
+      float val;
+    };
+    u64 = 0;
+    val = (float)(*(rccl_float8*)ptr);
+    return u64;
+  }
+};
+
+template <>
+struct RedOpArg<FuncPreMulSum<rccl_bfloat8>> {
+  static constexpr bool ArgUsed = true;
+  __device__ __forceinline__ static uint64_t loadArg(void* ptr) {
+    union {
+      uint64_t u64;
+      float val;
+    };
+    u64 = 0;
+    val = (float)(*(rccl_bfloat8*)ptr);
+    return u64;
+  }
+};
+
+template <>
 struct FuncPreMulSum<rccl_float8> {
     // Change these to switch between all prescale, all postscale, or both by sqrt(N).
     // Obviously, the only invalid combination is both true. An improvement would be
@@ -681,10 +711,10 @@ struct FuncPreMulSum<rccl_float8> {
   __device__ FuncPreMulSum(uint64_t opArg = 0) {
     union {
       uint64_t u64;
-      rccl_float8 val;
+      float val;
     };
     u64 = opArg;
-    scalar = (float)(val);
+    scalar = val;
   }
 };
 
@@ -699,10 +729,10 @@ struct FuncPreMulSum<rccl_bfloat8> {
   __device__ FuncPreMulSum(uint64_t opArg = 0) {
     union {
       uint64_t u64;
-      rccl_bfloat8 val;
+      float val;
     };
     u64 = opArg;
-    scalar = (float)(val);
+    scalar = val;
   }
 };
 #endif

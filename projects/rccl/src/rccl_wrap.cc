@@ -25,11 +25,13 @@ THE SOFTWARE.
 #include "graph/topo.h"
 #include "enqueue.h"
 #include <algorithm>
+#include <cstring>
 #include "debug.h"
 #include "net.h"
 #include "amdsmi_wrap.h"
 #include "include/graph.h"
 #include "register.h"
+#include "rccl_float8.h"
 
 // Use this param to experiment pipelining new data types besides bfloat16
 // Make sure you generate the device code with the new data type (i.e. in generate.py)
@@ -790,6 +792,29 @@ bool rcclUseReduceScatterDirect(struct ncclComm* comm, size_t& msgSize) {
   if (comm->nNodes == 4) return (msgSize <= (size_t)4194304);
   if (comm->nNodes == 8 || comm->nNodes == 16) return true;
   return false;
+}
+
+uint64_t rcclPackPremulSumImmediateFromFloat(float scale) {
+  uint64_t arg = 0;
+  std::memcpy(&arg, &scale, sizeof(float));
+  return arg;
+}
+
+uint64_t rcclPackPremulSumImmediateFromHostScalar(ncclDataType_t datatype, const void* scalar) {
+#if defined(RCCL_FLOAT8)
+  if (datatype == ncclFloat8e4m3) {
+    float s = (float)(*reinterpret_cast<const rccl_float8*>(scalar));
+    return rcclPackPremulSumImmediateFromFloat(s);
+  }
+  if (datatype == ncclFloat8e5m2) {
+    float s = (float)(*reinterpret_cast<const rccl_bfloat8*>(scalar));
+    return rcclPackPremulSumImmediateFromFloat(s);
+  }
+#endif
+  uint64_t arg = 0;
+  int size = ncclTypeSize(datatype);
+  if (size > 0) std::memcpy(&arg, scalar, size);
+  return arg;
 }
 
 RCCL_PARAM(HierarchicalReduceScatter, "HIERARCHICAL_REDUCE_SCATTER", 0);

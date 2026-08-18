@@ -221,6 +221,26 @@ namespace RcclUnitTesting
     testBed.Finalize();
   }
 
+  // Regression for AICOMRCCL-1945: FP8 avg PreMulSum scalar must be IEEE float,
+  // not host rccl_float8 (OCP) bits that gfx942 device code would decode as FNUZ.
+  TEST(AllReduce, Fp8Avg)
+  {
+    TestBed testBed;
+
+    std::vector<ncclFunc_t>     const funcTypes       = {ncclCollAllReduce};
+    std::vector<ncclDataType_t> const dataTypes       = {ncclFloat8e4m3, ncclFloat8e5m2};
+    std::vector<ncclRedOp_t>    const redOps          = {ncclAvg};
+    std::vector<int>            const roots           = {0};
+    std::vector<int>            const numElements     = {384, 1024};
+    std::vector<bool>           const inPlaceList     = {false};
+    std::vector<bool>           const managedMemList  = {false};
+    std::vector<bool>           const useHipGraphList = {false};
+
+    testBed.RunSimpleSweep(funcTypes, dataTypes, redOps, roots, numElements,
+                           inPlaceList, managedMemList, useHipGraphList);
+    testBed.Finalize();
+  }
+
   TEST(AllReduce, UserBufferRegistration)
   {
     const int nranks = 8;

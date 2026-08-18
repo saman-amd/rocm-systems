@@ -131,6 +131,10 @@ NCCL_API(ncclResult_t, rcclGetProtocolName, int protocol, const char** algoName)
 bool rcclUseAllGatherDirect(struct ncclComm* comm, size_t& msgSize);
 bool rcclUseHierarchicalAllGather(struct ncclComm* comm, size_t msgSize);
 bool rcclUseReduceScatterDirect(struct ncclComm* comm, size_t& msgSize);
+// Pack a PreMulSum immediate as IEEE float bits. FP8 avg cannot store 1/nRanks as
+// host rccl_float8: gfx942 device code is FNUZ while the host type is OCP.
+uint64_t rcclPackPremulSumImmediateFromFloat(float scale);
+uint64_t rcclPackPremulSumImmediateFromHostScalar(ncclDataType_t datatype, const void* scalar);
 bool rcclUseHierarchicalReduceScatter(struct ncclComm* comm, size_t msgSize);
 size_t rcclHierarchicalTempBufferSize(int nNodes, bool allGather, bool reduceScatter);
 // Fills in algo/protocol/channels for a hierarchical AllGather or ReduceScatter.
