@@ -6,9 +6,9 @@ The percentages below are approximate API-name coverage against declarations par
 
 ## Snapshot
 
-- Contract tests: 608
-- Declared HIP runtime APIs parsed from `hip_runtime_api.h`: 497
-- Declared HIP runtime APIs directly exercised by contract tests: 486
+- Contract tests: 612
+- Declared HIP runtime APIs parsed from `hip_runtime_api.h`: 498
+- Declared HIP runtime APIs directly exercised by contract tests: 487
 - Approximate declared API-name coverage: 97.8%
 - Additional public macro exercised: `hipLaunchKernelGGL`
 - Additional non-runtime-header APIs exercised: HIPRTC (`hiprtcCreateProgram`, `hiprtcCompileProgram`, `hiprtcGetCodeSize`, `hiprtcGetCode`, `hiprtcGetProgramLogSize`, `hiprtcGetProgramLog`, `hiprtcDestroyProgram`); and the OpenGL interop entry points declared in `hip/hip_gl_interop.h` (`hipGLGetDevices`, `hipGraphicsGLRegisterBuffer`, `hipGraphicsGLRegisterImage`), which are AMD-gated because the NVIDIA header pulls in `<GL/gl.h>` (a headless CUDA node need not have it). These are not declared in `hip_runtime_api.h` and are excluded from the coverage denominator and covered counts.
@@ -127,7 +127,7 @@ The percentages below are approximate API-name coverage against declarations par
 | `ipc` | 5 |
 | `external_resource` | 8 |
 | `module` | 7 |
-| `module_exec` | 8 |
+| `module_exec` | 12 |
 | `module_load_ex` | 4 |
 | `module_load_file` | 6 |
 | `jit_link` | 6 |
@@ -511,6 +511,7 @@ hipModuleLoadDataEx
 hipModuleUnload
 hipModuleGetFunction
 hipModuleGetFunctionCount
+hipModuleEnumerateFunctions
 hipModuleGetGlobal
 hipModuleLaunchKernel
 hipModuleLaunchCooperativeKernel

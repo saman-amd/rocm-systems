@@ -112,6 +112,23 @@ hipError_t hipModuleGetFunctionCount(unsigned int* count, hipModule_t mod) {
   HIP_RETURN(PlatformState::Instance().GetFuncCount(count, mod));
 }
 
+hipError_t hipModuleEnumerateFunctions(hipFunction_t* functions, unsigned int numFunctions,
+                                       hipModule_t mod) {
+  HIP_INIT_API(hipModuleEnumerateFunctions, functions, numFunctions, mod);
+
+  if (mod == nullptr) {
+    HIP_RETURN(hipErrorInvalidResourceHandle);
+  }
+  if (functions == nullptr) {
+    HIP_RETURN(hipErrorInvalidValue);
+  }
+  if (numFunctions == 0) {
+    HIP_RETURN(hipSuccess);
+  }
+
+  HIP_RETURN(PlatformState::Instance().EnumerateFunctions(functions, numFunctions, mod));
+}
+
 hipError_t hipModuleGetGlobal(hipDeviceptr_t* dptr, size_t* bytes, hipModule_t hmod,
                               const char* name) {
   HIP_INIT_API(hipModuleGetGlobal, dptr, bytes, hmod, name);
