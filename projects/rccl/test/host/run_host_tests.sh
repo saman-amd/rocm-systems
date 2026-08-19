@@ -131,15 +131,10 @@ do_host_tests() {
     name="$(basename "$exe")"
     echo "==> Run  ($name)"
     mkdir -p "$COVERAGE_DIR/$name"
-    if [ "$name" = "rccl-HostUnitTests" ]; then
-      LLVM_PROFILE_FILE="$COVERAGE_DIR/$name/%p.profraw" "$exe" \
+    LLVM_PROFILE_FILE="$COVERAGE_DIR/$name/%p.profraw" "$exe" \
         --gtest_filter="$GTEST_FILTER" \
         --gtest_output="xml:$XML_FILE" \
         --gtest_color=no "$@" 2>&1 | "${stamp[@]}" | tee "$LOG_FILE"
-    else
-      LLVM_PROFILE_FILE="$COVERAGE_DIR/$name/%p.profraw" "$exe" \
-        --gtest_color=no 2>&1 | "${stamp[@]}"
-    fi
   done < <(find "$BUILD_DIR" -maxdepth 1 -type f -executable -print0)
 }
 
