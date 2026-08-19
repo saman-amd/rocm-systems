@@ -127,7 +127,7 @@ do_host_tests() {
   # Run the test binaries, each writing its profraw into its own per-binary
   # subdir.
   local exe name
-  for exe in $(find "$BUILD_DIR" -maxdepth 1 -type f -executable); do
+  while IFS= read -r -d '' exe; do
     name="$(basename "$exe")"
     echo "==> Run  ($name)"
     mkdir -p "$COVERAGE_DIR/$name"
@@ -140,7 +140,7 @@ do_host_tests() {
       LLVM_PROFILE_FILE="$COVERAGE_DIR/$name/%p.profraw" "$exe" \
         --gtest_color=no 2>&1 | "${stamp[@]}"
     fi
-  done
+  done < <(find "$BUILD_DIR" -maxdepth 1 -type f -executable -print0)
 }
 
 # Run the kernel-count guard pytest suite (test/kernel-count) in a local venv so
