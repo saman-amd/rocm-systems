@@ -10,99 +10,77 @@
 #include "algorithms/all_gather/all_gather_dda_fabric_ll128.h"
 #include "checks.h"
 #include "comm.h"
-#include "dda_init_detail.h" // nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer
+#include "dda_init_detail.h" // DDA_FABRIC_MAXBLOCKS
 #include "debug.h"
 #include "fabric_gpu_barrier.h" // meta::comms::kDdaMaxNranks
 #include "param.h"
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib> // getenv (grid-shape tuning overrides)
 #include <utility>
 
-// Runtime-adjustable LL128 AllGather block size (threads/block). Must be a
-// multiple of 16 (lanes per 128B line) in [16, 1024]; invalid values fall back
-// to the tuned default. Env: RCCL_DDA_LL128_AG_THREADS.
-RCCL_PARAM(DdaLL128AgThreads, "DDA_LL128_AG_THREADS", 1024);
+// Runtime-adjustable LL128 AllGather grid shape. Threads must be a multiple of
+// the wave size in [wave, 1024]; invalid values fall back to the tuned default.
+// Env: RCCL_DDA_LL128_AG_THREADS, RCCL_DDA_LL128_AG_MAXBLOCKS.
+RCCL_PARAM(DdaLL128AgThreads, "DDA_LL128_AG_THREADS", 512);
+RCCL_PARAM(DdaLL128AgMaxBlocks, "DDA_LL128_AG_MAXBLOCKS", DDA_FABRIC_MAXBLOCKS);
 
 namespace {
 
-// Grid-shape tuning knobs (env-overridable) for the LL128 AllGather mapping.
-// Defaults are tuned for gfx1250; env overrides are kept for per-platform
-// retuning: RCCL_DDA_LL128_AG_LPB (lines/block), _MAXBPP (blocks/peer cap,
-// clamped to the device epoch array).
-static inline size_t ddaLL128AgLinesPerBlockEnv(size_t dflt) {
-  const char* s = getenv("RCCL_DDA_LL128_AG_LPB");
-  if (s && *s) {
-    long v = strtol(s, nullptr, 10);
-    if (v > 0) return (size_t)v;
-  }
-  return dflt;
-}
-static inline int ddaLL128AgMaxBppEnv(int dflt) {
-  const char* s = getenv("RCCL_DDA_LL128_AG_MAXBPP");
-  if (s && *s) {
-    long v = strtol(s, nullptr, 10);
-    if (v > 0) return (int)v;
-  }
-  return dflt;
-}
+using meta::comms::ddaLL128AgMaxPerRankBytes;
+using meta::comms::ddaLL128AgSlices;
+using meta::comms::ddaLL128AgSlotWords;
+namespace ll128 = meta::comms::ll128;
+
 // Validated block size from the runtime flag; falls back to `dflt` if the
-// configured value is not a multiple of 16 in [16, 1024].
-static inline unsigned ddaLL128AgThreads(unsigned dflt) {
+// configured value is not a whole number of waves in [wave, 1024].
+unsigned ddaLL128AgThreads(unsigned dflt) {
   const int64_t v = rcclParamDdaLL128AgThreads();
-  if (v >= 16 && v <= 1024 && (v % 16) == 0) {
+  if (v >= ll128::kWarp && v <= 1024 && (v % ll128::kWarp) == 0) {
     return (unsigned)v;
   }
   return dflt;
 }
 
-using meta::comms::kDdaLL128AgMaxPerRankBytes;
-using meta::comms::kDdaLL128AgSlotStrideLines;
-using meta::comms::kDdaLL128DataElems;
-using meta::comms::LLLine128;
-using nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer;
-
-// LL128 scratch: 2 banks * nRanks slots * kDdaLL128AgSlotStrideLines * 128B.
-static inline size_t ddaLL128AgScratchSize(int nRanks) {
-  return (size_t)2 * (size_t)nRanks * kDdaLL128AgSlotStrideLines * sizeof(LLLine128);
+// Total blocks the grid may use.
+size_t ddaLL128AgBlockCap() {
+  int64_t cap = rcclParamDdaLL128AgMaxBlocks();
+  cap = std::min<int64_t>(std::max<int64_t>(cap, 1), DDA_FABRIC_MAXBLOCKS);
+  return (size_t)cap;
 }
 
-// Adaptive block-per-peer fan-out over 128B lines. One block per peer for small
-// messages; larger ones split a peer's line range across blocksPerPeer blocks.
-// Tuned on gfx1250 (4-GPU): a small lines-per-block split saturates the
-// blocks-per-peer cap early, and 1024-thread blocks (64 line-groups) maximize
-// per-block memory-level parallelism. See ddaLL128AgThreadsEnv default below.
-constexpr size_t kDdaLL128AgLinesPerBlock = 4;
-
-static inline int ddaLL128AgBlocksPerPeer(size_t perRankBytes) {
-  const size_t nWords = perRankBytes >> 3;
-  const size_t numLines = (nWords + (size_t)kDdaLL128DataElems - 1) / (size_t)kDdaLL128DataElems;
-  const size_t linesPerBlock = ddaLL128AgLinesPerBlockEnv(kDdaLL128AgLinesPerBlock);
-  const int maxBpp = ddaLL128AgMaxBppEnv(kDdaLLAgMaxBlocksPerPeer);
-  if (numLines <= linesPerBlock) {
-    return 1;
+// Blocks in one peer column: a warp per slice, capped by the column's share of
+// the grid budget. Warps past the slice count own no slice. nCols is nRanks - 1,
+// since LL128 has no column for the local copy.
+unsigned ddaLL128AgBlocksPerPeer(size_t slices, size_t warpsPerBlock, int nCols, size_t totalBlockCap) {
+  const size_t warps = warpsPerBlock < 1 ? 1 : warpsPerBlock;
+  const size_t cap = totalBlockCap / (size_t)(nCols < 1 ? 1 : nCols);
+  size_t bpp = (slices + warps - 1) / warps;
+  if (bpp > cap) {
+    bpp = cap;
   }
-  size_t bpp = (numLines + linesPerBlock - 1) / linesPerBlock;
-  if (bpp > (size_t)maxBpp) {
-    bpp = (size_t)maxBpp;
-  }
-  return (int)bpp;
+  return bpp < 1 ? 1u : (unsigned)bpp;
 }
 
-// Single source of the launch geometry: grid.x = peer (nRanks), grid.y = the
-// per-peer line split, clamped so flatBlockId (nRanks*bpp-1) stays within the
-// device epoch array (sized for nRanks*kDdaLLAgMaxBlocksPerPeer cells).
+// Single source of the launch geometry: grid.x = one column per remote peer
+// (nRanks - 1, since LL128 has no column for the local copy), grid.y = the
+// per-peer slice split. The kernel indexes epochDev[flatBlockId] with
+// flatBlockId up to nCols*bpp-1, so the grid is clamped to the device epoch
+// array (sized for nRanks*kDdaLLAgMaxBlocksPerPeer cells) whatever the block
+// cap says; that sizing always leaves room for at least one block per column.
 static inline std::pair<dim3, dim3> ddaAllGatherFabricLL128Geom(ncclComm* comm, size_t perRankBytes) {
-  const unsigned threads = ddaLL128AgThreads(1024); // multiple of 16 (lanes/line)
-  int blocksPerPeer = ddaLL128AgBlocksPerPeer(perRankBytes);
-  if (comm->nRanks * blocksPerPeer > comm->ddaLLEpochLen) {
-    blocksPerPeer = comm->ddaLLEpochLen / comm->nRanks;
-    if (blocksPerPeer < 1) blocksPerPeer = 1;
+  const unsigned threads = ddaLL128AgThreads(512);
+  const size_t warps = threads / (unsigned)ll128::kWarp;
+  const int nCols = comm->nRanks > 1 ? comm->nRanks - 1 : 1;
+  unsigned blocksPerPeer =
+    ddaLL128AgBlocksPerPeer(ddaLL128AgSlices(perRankBytes), warps, nCols, ddaLL128AgBlockCap());
+  if ((size_t)nCols * blocksPerPeer > (size_t)comm->ddaLLEpochLen) {
+    blocksPerPeer = (unsigned)std::max(comm->ddaLLEpochLen / nCols, 1);
   }
-  return std::make_pair(dim3((unsigned)comm->nRanks, (unsigned)blocksPerPeer), dim3(threads));
+  return std::make_pair(dim3((unsigned)nCols, blocksPerPeer), dim3(threads));
 }
 
 template <typename T>
@@ -112,35 +90,39 @@ static ncclResult_t ncclAllGatherDdaFabricLL128Typed(
   ncclComm* comm, cudaStream_t stream) {
   const int nRanks = comm->nRanks;
   const size_t perRankBytes = sendcount * sizeof(T);
+  const size_t slices = ddaLL128AgSlices(perRankBytes);
+  const size_t slotWords = ddaLL128AgSlotWords(nRanks, comm->ddaScratchBytes);
 
   auto gridBlock = ddaAllGatherFabricLL128Geom(comm, perRankBytes);
   const dim3 grid = gridBlock.first;
   const dim3 block = gridBlock.second;
-  const int blocksPerPeer = (int)grid.y;
+  const unsigned blocksPerPeer = grid.y;
 
   T** peers = reinterpret_cast<T**>(comm->ddaPeerPtrsDev);
   uint32_t* epochDev = comm->ddaLLEpochDev;
   const int epochLen = comm->ddaLLEpochLen;
 
-  INFO(NCCL_COLL, "DDA fabric AllGather LL128: nRanks=%d perRankBytes=%zu grid=%ux%u block=%u (block-per-peer, bpp=%d)",
-       nRanks, perRankBytes, grid.x, grid.y, block.x, blocksPerPeer);
+  INFO(NCCL_COLL,
+       "DDA fabric AllGather LL128: nRanks=%d perRankBytes=%zu slices=%zu grid=%ux%u block=%u "
+       "(warp-per-slice, bpp=%u, slotWords=%zu)",
+       nRanks, perRankBytes, slices, grid.x, grid.y, block.x, blocksPerPeer, slotWords);
 
   // NRANKS_CT 4/8: unrolled; 0: runtime fallback.
   switch (nRanks) {
   case 4:
     meta::comms::ddaAllGatherFabricLL128<T, 4>
       <<<grid, block, 0, stream>>>(peers, static_cast<T*>(recvbuff), static_cast<const T*>(sendbuff), perRankBytes,
-                                   comm->rank, nRanks, epochDev, epochLen);
+                                   comm->rank, nRanks, epochDev, epochLen, slices, slotWords);
     break;
   case 8:
     meta::comms::ddaAllGatherFabricLL128<T, 8>
       <<<grid, block, 0, stream>>>(peers, static_cast<T*>(recvbuff), static_cast<const T*>(sendbuff), perRankBytes,
-                                   comm->rank, nRanks, epochDev, epochLen);
+                                   comm->rank, nRanks, epochDev, epochLen, slices, slotWords);
     break;
   default:
     meta::comms::ddaAllGatherFabricLL128<T, 0>
       <<<grid, block, 0, stream>>>(peers, static_cast<T*>(recvbuff), static_cast<const T*>(sendbuff), perRankBytes,
-                                   comm->rank, nRanks, epochDev, epochLen);
+                                   comm->rank, nRanks, epochDev, epochLen, slices, slotWords);
     break;
   }
 
@@ -153,12 +135,13 @@ static ncclResult_t ncclAllGatherDdaFabricLL128Typed(
 
 bool ncclAllGatherDdaFabricLL128Eligible(ncclComm* comm, const void* sendbuff, void* recvbuff, size_t sendcount,
                                          ncclDataType_t datatype) {
-  (void)sendbuff;
-  (void)recvbuff;
   if (comm == nullptr || comm->bootstrap == nullptr) {
     return false;
   }
   if (comm->ddaFabricMemHandler == nullptr || comm->ddaScratch == nullptr || comm->ddaPeerPtrsDev == nullptr) {
+    return false;
+  }
+  if (comm->ddaLLEpochDev == nullptr || comm->ddaLLEpochLen < 1) {
     return false;
   }
   if (sendcount == 0) {
@@ -171,14 +154,18 @@ bool ncclAllGatherDdaFabricLL128Eligible(ncclComm* comm, const void* sendbuff, v
     return false;
   }
 
+  // The pack/unpack path moves 16B chunks with no chunk straddling a line, so
+  // require a 16B multiple and 16B-aligned user buffers rather than assuming it.
   const size_t perRankBytes = sendcount * ncclTypeSize(datatype);
   if (perRankBytes % 16 != 0) {
     return false;
   }
-  if (perRankBytes > kDdaLL128AgMaxPerRankBytes) {
+  if ((reinterpret_cast<uintptr_t>(sendbuff) % 16) != 0 || (reinterpret_cast<uintptr_t>(recvbuff) % 16) != 0) {
     return false;
   }
-  if (ddaLL128AgScratchSize(comm->nRanks) > comm->ddaScratchBytes) {
+  // Derived from the scratch allocation, so this also covers the case of a
+  // buffer too small to hold a single slice per slot.
+  if (perRankBytes > ddaLL128AgMaxPerRankBytes(comm->nRanks, comm->ddaScratchBytes)) {
     return false;
   }
 
