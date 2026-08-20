@@ -43,16 +43,6 @@ class MemBwAnalysisResult:
 
 
 @dataclass(frozen=True)
-class MembwMetricResult:
-    """Result of loading and evaluating membw metrics from a workload."""
-
-    metric_values: dict[str, Optional[float]]
-    metric_units: dict[str, str]
-    availability: Literal["full", "partial", "unavailable"]
-    availability_reason: Optional[str]
-
-
-@dataclass(frozen=True)
 class NodeSpec:
     """Parsed node from the tree spec YAML."""
 
