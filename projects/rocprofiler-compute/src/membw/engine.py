@@ -6,15 +6,25 @@
 import operator
 from typing import Callable, Optional
 
+import pandas as pd
+
 from membw.debug import print_evaluation_summary, print_evaluation_trace
 from membw.guidance import render_guidance_blocks
+from membw.metric_extract import (
+    check_metric_availability,
+    extract_metric_units,
+    extract_metric_values,
+)
 from membw.models import (
+    MEMBW_TABLE_IDS,
     BottleneckNode,
     MemBwAnalysisResult,
     NodeSpec,
     SupportingMetric,
     TreeSpec,
 )
+from membw.tree_spec import collect_metric_keys, load_tree_spec
+from utils.logger import console_warning
 
 # YAML specs use SQL-style names (gte, lte); operator module uses ge, le.
 _OPS: dict[str, Callable[[float, float], bool]] = {
@@ -70,6 +80,38 @@ def evaluate_membw_tree(
     print_evaluation_summary(result)
 
     return result
+
+
+def run_membw_analysis(
+    dfs: dict[int, pd.DataFrame],
+    gpu_arch: str,
+) -> Optional[MemBwAnalysisResult]:
+    """Run the full membw pipeline: extract metrics, evaluate tree, return result."""
+    membw_dfs = {tid: dfs[tid] for tid in MEMBW_TABLE_IDS if tid in dfs}
+    if not membw_dfs:
+        return None
+
+    try:
+        tree_spec = load_tree_spec(gpu_arch)
+    except SystemExit:
+        console_warning("membw", f"No tree spec for {gpu_arch}, skipping")
+        return None
+
+    metric_keys = collect_metric_keys(tree_spec)
+    metric_values = extract_metric_values(membw_dfs, metric_keys)
+    metric_units = extract_metric_units(membw_dfs)
+    availability, availability_reason = check_metric_availability(
+        membw_dfs, metric_keys
+    )
+
+    return evaluate_membw_tree(
+        tree_spec,
+        metric_values,
+        gpu_arch,
+        availability,
+        availability_reason,
+        metric_units=metric_units,
+    )
 
 
 # --- Private helpers ---
