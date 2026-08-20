@@ -35,6 +35,43 @@
       }
     }
   },
+  "timing": {
+    "_provenance": "issue_cycles for lane-parallel classes are per 16-lane pass (the model multiplies by wave_lanes/simd_lanes); scalar/branch entries are per instruction. clock_mhz and compute_units track vm.gpu.device (max_engine_clk_fcompute, simd_count/simd_per_cu = 1216/4 = 304 active CUs, not the 320 physical CUs the topology instantiates). global.bytes_per_cycle = 70% of 8192b x 1300MHz x 4 = 5.33 TB/s peak, over the 2.1 GHz shader clock. lds.bytes_per_cycle = 128 B/clk/CU x 304. dispatch_latency_cycles is one memory round trip, the shortest a dispatch can take: this model has no latency model, so the floor is the only place that cost appears. It is NOT launch overhead -- the clock deliberately does not advance between dispatches, so a launch costs nothing and kernel time is what is reported. matrix_multiply is 8 cycles/pass, half the CDNA4 rate. See the timing-model design notes for the full derivation.",
+    "model": "leaky",
+    "clock_mhz": 2100,
+    "machine": {
+      "compute_units": 304,
+      "simd_lanes": 16,
+      "dispatch_latency_cycles": 900,
+      "global": { "bytes_per_cycle": 1775 },
+      "lds": { "bytes_per_cycle": 38912 },
+
+      "none": { "ports": 1 },
+      "unknown": { "issue_cycles": 64 },
+      "vector_alu": { "issue_cycles": 1, "ports": 4 },
+      "scalar_alu": { "issue_cycles": 1, "ports": 1 },
+      "transcendental": { "issue_cycles": 4, "ports": 4 },
+      "matrix_multiply": { "issue_cycles": 8, "ports": 4 },
+      "local_data_share": { "ports": 1 },
+      "lds_read": { "issue_cycles": 1 },
+      "lds_write": { "issue_cycles": 1 },
+      "vector_memory": { "ports": 1 },
+      "vector_memory_read": { "issue_cycles": 2 },
+      "vector_memory_write": { "issue_cycles": 2 },
+      "vector_memory_atomic": { "issue_cycles": 4 },
+      "scalar_memory": { "issue_cycles": 8, "ports": 1 },
+      "tensor_memory": { "issue_cycles": 8 },
+      "export": { "issue_cycles": 8, "ports": 1 },
+      "branch": { "issue_cycles": 8, "ports": 1 },
+      "wait_counter": { "issue_cycles": 1 },
+      "delay_alu": { "issue_cycles": 1 },
+      "barrier": { "issue_cycles": 8 },
+      "message": { "issue_cycles": 16 },
+      "nop": { "issue_cycles": 1 },
+      "terminate": { "issue_cycles": 1 }
+    },
+    "model_config": {}
+  },
   "topology": {
     "root": {
       "name": "soc", "type": "soc",

@@ -10,6 +10,10 @@
 #include "rocjitsu/vm/plugins/plugin_loader.h"
 #include "rocjitsu/vm/rj_vm_impl.h"
 #include "rocjitsu/vm/soc.h"
+#include "rocjitsu/vm/timing/observer.h"
+#include "rocjitsu/vm/timing/simulated_clock.h"
+#include "rocjitsu/vm/timing/timing_config.h"
+#include "rocjitsu/vm/timing/timing_loader.h"
 
 #include "rocjitsu/base/rj_compiler.h"
 #include "util/log.h"
@@ -22,6 +26,7 @@ RJ_DIAGNOSTIC_POP
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <vector>
@@ -31,11 +36,63 @@ using namespace rocjitsu;
 namespace {
 
 void shutdown_plugin_group(rj_vm_t *vm) {
+  // Unconditional, and outside the guard below. The clock holds a bare pointer
+  // into an object owned by a plugin that is about to be destroyed, and plugin
+  // libraries are never dlclosed -- a read through a stale pointer would find
+  // mapped code and mapped vtables and return a plausible number rather than
+  // faulting. Releasing it on every path, including the ones where the group
+  // was never marked active, is the only way to be sure the pointer never
+  // outlives its owner.
+  amdgpu::SimulatedClock::instance().set_time_source(nullptr);
+
   // Host API preconditions keep this outside the simulation-callback interval:
   // either execution has not started, or the engine workers have stopped and
   // joined. callback_mutex_ is intentionally not lifecycle synchronization.
   if (vm && vm->soc && vm->plugin_group_active.exchange(false, std::memory_order_acq_rel))
     vm->soc->plugin_group().onShutdown();
+
+  if (!vm)
+    return;
+
+  // Drop the group before the model. The observer inside it holds references to
+  // both the model and the config that is the model's TimingHost, so releasing
+  // those first would leave the group owning an object whose referents are
+  // gone. Replacing the group rather than clearing it keeps the invariant that
+  // the group pointer is never null.
+  if (vm->soc)
+    vm->soc->set_plugin_group(ExecutionPluginGroup::empty_group());
+  vm->timing_model.reset();
+  vm->timing_config.reset();
+}
+
+/// @brief Load the model named by the config's `timing` block and attach it.
+///
+/// @details Returns quietly when there is no `timing` block, which is the
+/// normal case. A block that names a model rocjitsu cannot load is different:
+/// it is reported and the run continues with no model, because the alternative
+/// -- substituting one -- would publish numbers attributed to a model the
+/// config did not name.
+void attach_timing_model(rj_vm_t *vm, const std::string &config_json,
+                         const std::string &model_dir) {
+  auto config = timing::TimingConfig::parse(config_json);
+  if (!config)
+    return;
+
+  timing::OwnedTimingModel model = timing::TimingModelLoader::load(*config, model_dir);
+  if (!model)
+    return;
+
+  auto observer = std::make_unique<timing::TimingObserver>(*model, *config);
+  // The clock is bound to the observer's adapter rather than to the model
+  // directly so that the pointer the simulator holds is owned by the object the
+  // group is about to take, and the two die together.
+  timing::TimeSource *clock = observer->time_source();
+  if (!vm->soc->plugin_group().add(std::move(observer)))
+    return;
+
+  vm->timing_config = std::move(config);
+  vm->timing_model = std::move(model);
+  amdgpu::SimulatedClock::instance().set_time_source(clock);
 }
 
 rj_status_t create_from_loaded(config::LoadedConfig &loaded, rj_vm_mode_t mode, rj_vm_t **handle) {
@@ -278,8 +335,21 @@ rj_status_t rj_vm_load_plugins(rj_vm_t *vm, const char *config_json, const char 
     // the group cannot overlap simulation callbacks.
     shutdown_plugin_group(vm);
     vm->soc->set_plugin_group(group);
-    group->onInit();
+    // Published before onInit(), not after. This flag is what makes a later
+    // shutdown_plugin_group() run the teardown, so any binding that hands the
+    // simulator a pointer into a plugin may only be published once that
+    // teardown is guaranteed to run. Set afterwards, an onInit() that throws
+    // unwinds past a group nobody will ever shut down, leaving whatever it
+    // managed to register pointing at objects the destructor is about to free.
+    // The cost is that such a failure now gets an onShutdown() matching a
+    // partial onInit(), which a plugin can defend against; a dangling pointer
+    // it cannot.
     vm->plugin_group_active.store(true, std::memory_order_release);
+    // After the flag and before onInit(): the flag is what guarantees the
+    // teardown that releases the clock will run, and onInit() may already read
+    // a timestamp.
+    attach_timing_model(vm, config_json, plugin_dir ? plugin_dir : "");
+    group->onInit();
     return ROCJITSU_STATUS_SUCCESS;
   } catch (const std::exception &) {
     return ROCJITSU_STATUS_ERROR;

@@ -17,6 +17,8 @@ set(RJ_HOOKS_LINK_LIBS
     rocjitsu_isa
     rocjitsu_amdgpu_isa_registry
     rocjitsu_vm_amdgpu
+    # hwreg.cpp and the generated time instructions read the guest clock.
+    rocjitsu_timing_clock
     util
     flatbuffers
     simdojo

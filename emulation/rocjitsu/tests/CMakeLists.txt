@@ -17,6 +17,13 @@ set(RJ_OBJECT_LIBS
     rocjitsu_kmd
     rocjitsu_vm
     rocjitsu_vm_amdgpu
+    # rocjitsu_vm's rj_vm_load_plugins() parses the `timing` block and loads a
+    # model, so every image carrying it needs the whole timing core, not just
+    # the clock. The clock stays listed because the two are separate libraries:
+    # the ISA bodies and hwreg read the clock and must not drag in a config
+    # parser or a model loader.
+    rocjitsu_timing
+    rocjitsu_timing_clock
     rocjitsu_plugin_logging
     rocjitsu_plugin_race_detector
     rocjitsu_plugin_throughput
@@ -521,9 +528,23 @@ add_executable(
     race-detector/race_detector_event_registry_test.cpp
     race-detector/race_detector_tests.cpp
     race-detector/interval_set_tests.cpp
+    timing/timing_event_test.cpp
+    timing/timing_config_test.cpp
+    timing/timing_clock_test.cpp
+    timing/timing_leaky_model_test.cpp
+    timing/timing_observer_test.cpp
     data_types_test.cpp
     drm_info_layout_test.cpp
 )
+
+# The sample model. The timing core itself arrives through RJ_OBJECT_LIBS,
+# which every test target already links; adding it again here would put its
+# objects in the link line twice. The tests drive the model through its own
+# header with no simulator behind it, which is the property event.h was shaped
+# to give. models/leaky/model_export.cpp is deliberately absent: the loader
+# exports belong only to the shared object, where they cannot collide with a
+# second model's.
+target_link_libraries(rocjitsu_tests PRIVATE rocjitsu_timing_leaky)
 if(HAS_DEVICE_KERNELS)
     target_sources(
         rocjitsu_tests
@@ -2403,6 +2424,36 @@ if(RJ_ENABLE_HIP_TESTS)
         rj_add_hip_test_case(
             hip_vector_add_test
             "HipVectorAddTest.CorrectResult"
+            CONFIG ${RJ_HIP_TEST_CONFIG}
+        )
+
+        # The end-to-end proof that a guest observes the timing model's clock.
+        # Every other timing test drives a model directly with hand-built
+        # events; this one asks a real HIP program what time it thinks it is,
+        # which is the one thing that cannot be checked from below.
+        #
+        # It only tests anything if the config it runs under has a `timing`
+        # block naming a model. RJ_HIP_TEST_CONFIG is a cache variable, so
+        # pointing it at a config without one leaves these three tests passing
+        # while measuring host wall time.
+        rj_add_hip_test(
+            hip_timing_model_test
+            ARCH ${RJ_HIP_TEST_ARCH}
+            SOURCE timing/hip_timing_model_test.cpp
+        )
+        rj_add_hip_test_case(
+            hip_timing_model_test
+            "HipTimingModelTest.ElapsedTimeIsReproducible"
+            CONFIG ${RJ_HIP_TEST_CONFIG}
+        )
+        rj_add_hip_test_case(
+            hip_timing_model_test
+            "HipTimingModelTest.ElapsedTimeScalesWithWork"
+            CONFIG ${RJ_HIP_TEST_CONFIG}
+        )
+        rj_add_hip_test_case(
+            hip_timing_model_test
+            "HipTimingModelTest.InKernelClockIsMonotonic"
             CONFIG ${RJ_HIP_TEST_CONFIG}
         )
 

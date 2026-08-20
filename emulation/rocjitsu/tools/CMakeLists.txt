@@ -10,6 +10,8 @@ set(RJ_TOOL_OBJECT_LIBS
     rocjitsu_amdgpu_isa_registry
     simdojo
     rocjitsu_vm_amdgpu
+    # hwreg.cpp and the generated time instructions read the guest clock.
+    rocjitsu_timing_clock
 )
 
 add_library(rocjitsu_tooling STATIC dbt_translate.cpp)

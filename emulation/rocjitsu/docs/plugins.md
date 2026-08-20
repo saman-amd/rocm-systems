@@ -73,6 +73,13 @@ The logging plugin records kernel dispatch metadata and detects MMA
 - **MMA detection**: reports the first MFMA or WMMA instruction seen in
   each dispatch.
 
+## Timing models
+
+Timing models are a separate extension point with its own loader and its own
+config block. They are not listed in `plugins` and cannot be selected there: a
+model drives the clock the guest reads, and an observer chosen by accident must
+never end up doing that. See [timing-model.md](timing-model.md).
+
 ## Enabling plugins
 
 Plugins are compiled into standalone shared objects named

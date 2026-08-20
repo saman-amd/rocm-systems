@@ -89,5 +89,55 @@
         "latency": 1, "weight": 10
       }
     ]
+  },
+  "timing": {
+    "model": "leaky",
+
+    "//clock": "The part is specified at 2.2-2.4 GHz and this file advertises 2200 MHz to the guest through KFD. The modelled rate is kept separate on purpose: the advertised rate is what the guest divides by, the modelled rate is what produces the cycles, and silently fusing them turns a clock edit into a model change.",
+    "clock_mhz": 2100,
+
+    "machine": {
+      "//compute_units": "The count the device ADVERTISES (simd_count 1024 / simd_per_cu 4), not the 288 this file's topology instantiates. A guest sizes its grid against the advertised number, so that is the one a throughput bound divides by.",
+      "compute_units": 256,
+      "//simd_lanes": "A CDNA SIMD is 16 lanes wide, so a wave64 instruction is four passes.",
+      "simd_lanes": 16,
+
+      "//issue_cycles": "Per-pass issue occupancy, multiplied by passes. vector_alu 1 therefore gives the familiar four cycles per wave64 VALU instruction per SIMD. unknown.issue_cycles is deliberately absent: leaving it unnamed makes the host resolve it to the largest cost here, which is the point of InstClass::Unknown. Naming it would be a way to make an unclassified opcode cheap.",
+      "//ports": "Units per compute unit: four SIMDs, one of everything else. The 'none' entry is the front-end issue slot every instruction occupies whatever unit it goes to, so a wait or an s_nop is not free.",
+
+      "none":                 { "ports": 1 },
+      "vector_alu":           { "issue_cycles": 1, "ports": 4 },
+      "scalar_alu":           { "issue_cycles": 1, "ports": 1 },
+      "transcendental":       { "issue_cycles": 4, "ports": 4 },
+      "matrix_multiply":      { "issue_cycles": 4, "ports": 4 },
+      "local_data_share":     { "ports": 1 },
+      "vector_memory":        { "ports": 1 },
+      "scalar_memory":        { "issue_cycles": 1, "ports": 1 },
+      "branch":               { "issue_cycles": 1, "ports": 1 },
+      "export":               { "issue_cycles": 1, "ports": 1 },
+
+      "lds_read":             { "issue_cycles": 1 },
+      "lds_write":            { "issue_cycles": 1 },
+      "vector_memory_read":   { "issue_cycles": 1 },
+      "vector_memory_write":  { "issue_cycles": 1 },
+      "vector_memory_atomic": { "issue_cycles": 4 },
+      "tensor_memory":        { "issue_cycles": 4 },
+      "wait_counter":         { "issue_cycles": 1 },
+      "delay_alu":            { "issue_cycles": 1 },
+      "barrier":              { "issue_cycles": 1 },
+      "message":              { "issue_cycles": 1 },
+      "nop":                  { "issue_cycles": 1 },
+      "terminate":            { "issue_cycles": 1 },
+
+      "//global": "A measured floor from the reference kernel corpus rather than the 8192-bit x 1900 MHz peak this file describes. A peak rate silently rewrites every bandwidth-heavy kernel, and a config carrying one is indistinguishable from a config that was correlated.",
+      "global":               { "bytes_per_cycle": 3200 },
+      "//lds": "128 bytes per clock per compute unit.",
+      "lds":                  { "bytes_per_cycle": 32768 },
+
+      "//dispatch_latency_cycles": "The shortest a dispatch can take: roughly one trip through the pipeline for one wavefront, which is dominated by a memory round trip. This model has no latency model at all, so the floor is the only place that cost appears; left at zero, a kernel short enough to fit in one round trip would be reported as free.",
+      "dispatch_latency_cycles": 900
+    },
+
+    "model_config": {}
   }
 }

@@ -1791,6 +1791,7 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
 
   KernelDispatchInfo dispatch_info{};
   dispatch_info.dispatch_id = dp.dispatch_id;
+  dispatch_info.queue_id = dp.queue_id;
   dispatch_info.kernel_object = pkt.kernel_object;
   dispatch_info.entry_pc = entry_pc;
   dispatch_info.kernel_symbol = kernel_symbol;
@@ -1805,6 +1806,10 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
   dispatch_info.wfs_per_workgroup = wfs_per_wg;
   dispatch_info.sgprs_per_wf = dp.sgprs_per_wf;
   dispatch_info.vgprs_per_wf = dp.vgprs_per_wf;
+  // The granule-aligned size, which is what the compute unit actually reserves
+  // and therefore what bounds how many workgroups fit on it.
+  dispatch_info.lds_bytes_per_workgroup = aligned_lds_bytes_per_workgroup(dp);
+  dispatch_info.wave_size = wave_size;
   plugin_group_->onAmdgpuDispatchPacketProcessed(dispatch_info);
 
   util::Logger::vm([&](auto &os) {
@@ -2880,9 +2885,10 @@ void CommandProcessor::process_sdma_ring(HwQueue &queue, uint64_t read_idx, uint
     case sdma::OP_TIMESTAMP: {
       uint64_t addr_va = static_cast<uint64_t>(dw(1)) | (static_cast<uint64_t>(dw(2)) << 32);
       if (addr_va > 0x1000) {
-        auto now = std::chrono::steady_clock::now().time_since_epoch();
-        uint64_t ts = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+        // The same clock the HIP event timestamps come from, so a guest that
+        // brackets a copy with SDMA timestamps and a dispatch with HIP events
+        // gets both durations in one domain.
+        const uint64_t ts = hsa_system_timestamp();
         auto *ptr = static_cast<uint64_t *>(resolve(addr_va, sizeof(uint64_t)));
         if (ptr) {
           // Flush before the direct store so a dirty cached line overlapping the

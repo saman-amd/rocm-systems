@@ -19,8 +19,10 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <new>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <sys/mman.h>
@@ -862,8 +864,28 @@ int GuestKfd::get_clock_counters_ioctl(void *arg) {
     errno = EINVAL;
     return -1;
   }
-  if (args->gpu_id != guest_.gpu_id)
+  if (args->gpu_id != guest_.gpu_id) {
+    // The real driver answers from the host's clocks while the emulated node
+    // answers from the simulated one, so a guest holding both agents ends up
+    // subtracting timestamps taken from unrelated timelines. Behaviour is
+    // deliberately unchanged -- a passthrough node genuinely is a real device
+    // and its counters are the truthful answer for it -- but a run that mixes
+    // the two should say so rather than let the numbers imply one machine.
+    // Warn once per foreign node: this ioctl is on ROCR's calibration path and
+    // per-call logging would bury the run.
+    static std::mutex warned_mutex;
+    static std::set<uint32_t> warned;
+    bool first = false;
+    {
+      std::lock_guard<std::mutex> lock(warned_mutex);
+      first = warned.insert(args->gpu_id).second;
+    }
+    if (first)
+      util::Logger::warn("rocjitsu: GET_CLOCK_COUNTERS for gpu_id=", args->gpu_id,
+                         " is forwarded to the host driver; its timestamps are host time, "
+                         "not the simulated clock the emulated node reports");
     return forward_ioctl(AMDKFD_IOC_GET_CLOCK_COUNTERS, arg);
+  }
 
   return LinuxKfd::get_clock_counters_ioctl(arg);
 }

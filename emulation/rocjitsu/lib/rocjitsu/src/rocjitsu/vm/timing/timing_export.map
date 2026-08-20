@@ -1,0 +1,16 @@
+# Linker version script for rocjitsu timing-model shared objects.
+#
+# A model .so carries only its own model logic plus the three loader entry
+# points; it resolves nothing from the simulator at load time. That logic still
+# pulls in C-ABI and weak template symbols with default visibility, which the
+# per-target CXX_VISIBILITY_PRESET=hidden alone cannot keep out of the dynamic
+# symbol table. This script makes the loader entry points the only globally
+# visible symbols and forces everything else local.
+{
+  global:
+    rocjitsu_timing_model_metadata;
+    rocjitsu_timing_model_create;
+    rocjitsu_timing_model_destroy;
+  local:
+    *;
+};

@@ -1714,8 +1714,15 @@ def _derive_smem(name: str) -> InstructionSemantics | None:
         return InstructionSemantics(name, 'dcache_wb')
     if upper == 'S_GL1_INV':
         return InstructionSemantics(name, 'gl1_inv')
-    if upper in ('S_MEMTIME', 'S_MEMREALTIME'):
+    # Split rather than one class: S_MEMTIME is LLVM's readcyclecounter and
+    # reports shader cycles, S_MEMREALTIME is readsteadycounter and reports the
+    # constant-rate wall clock the guest divides by a separately advertised
+    # frequency. Collapsing them makes every s_memrealtime interval wrong by
+    # the ratio of the two clocks while still type-checking.
+    if upper == 'S_MEMTIME':
         return InstructionSemantics(name, 'smem_time')
+    if upper == 'S_MEMREALTIME':
+        return InstructionSemantics(name, 'smem_realtime')
     # Remaining scalar cache / special instructions.
     if 'DCACHE' in upper or upper in ('S_ATC_PROBE', 'S_ATC_PROBE_BUFFER'):
         return InstructionSemantics(name, 'nop')

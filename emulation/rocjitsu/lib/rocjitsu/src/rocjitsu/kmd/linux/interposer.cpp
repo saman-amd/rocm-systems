@@ -27,6 +27,7 @@
 #include "rocjitsu/vm/plugins/plugin_loader.h"
 #include "rocjitsu/vm/rj_vm.h"
 #include "rocjitsu/vm/rj_vm_impl.h"
+#include "rocjitsu/vm/timing/simulated_clock.h"
 
 RJ_DIAGNOSTIC_PUSH
 RJ_DIAGNOSTIC_IGNORE_PEDANTIC
@@ -2432,8 +2433,28 @@ RJ_INTERPOSER_EXPORT int ioctl(int fd, unsigned long request, ...) {
         dev.num_shader_engines = rocjitsu::kmd::drm_shader_engine_count(
             gpu->array_count_per_xcc(), gpu->num_shader_arrays_per_engine);
         dev.num_shader_arrays_per_engine = gpu->num_shader_arrays_per_engine;
-        dev.gpu_counter_freq = 100000;
-        dev.max_engine_clock = gpu->max_engine_clk_fcompute;
+        // libhsakmt copies this straight into HsaNodeProperties::WallClockKHz,
+        // which ROCR multiplies by 1000 and hands to the guest as the wall
+        // clock rate. It is therefore the divisor for every s_memrealtime and
+        // MSG_RTN_GET_REALTIME difference, and must name the same rate the
+        // clock counts at rather than a number that merely happens to match.
+        dev.gpu_counter_freq =
+            static_cast<uint32_t>(rocjitsu::amdgpu::SimulatedClock::kWallClockFrequencyHz / 1000);
+        // With a model driving the clock, report the model's shader clock: a
+        // guest that measures microseconds here and converts them to cycles
+        // must use the clock of the machine that produced the microseconds.
+        // Left at the configured value when no model is installed, so a run
+        // without one advertises exactly what it always did.
+        //
+        // Expressed in MHz to match that untouched branch. The DRM field is
+        // documented as kHz, but rocjitsu has always answered it with the
+        // sysfs MHz number, and switching units only under a model would make
+        // installing one look like a 1000x clock change to whatever reads it.
+        const uint64_t model_shader_hz =
+            rocjitsu::amdgpu::SimulatedClock::instance().shader_clock_hz();
+        dev.max_engine_clock = model_shader_hz != 0
+                                   ? static_cast<uint32_t>(model_shader_hz / 1000000)
+                                   : gpu->max_engine_clk_fcompute;
         dev.max_memory_clock = gpu->mem_clk_max;
         dev.wave_front_size = gpu->wave_front_size;
         dev.num_cu_per_sh = gpu->num_cu_per_sh;

@@ -349,6 +349,7 @@ add_subdirectory(lib/util)
 add_subdirectory(lib/simdojo)
 add_subdirectory(lib/rocjitsu)
 add_subdirectory(lib/rocjitsu/src/rocjitsu/vm/plugins)
+add_subdirectory(lib/rocjitsu/src/rocjitsu/vm/timing)
 
 # Main shared library - assembles all object libraries.
 add_library(rocjitsu_shared SHARED)
@@ -368,6 +369,11 @@ target_link_libraries(
         # linked in statically; they are separate librocjitsu_plugin_<name>.so
         # modules discovered and dlopen()ed at runtime.
         rocjitsu_plugin_loader
+        # Timing core: config block, observer and the loader that dlopen()s
+        # librocjitsu_timing_<model>.so, plus the guest-visible clock every
+        # layer below reads.
+        rocjitsu_timing
+        rocjitsu_timing_clock
         rocjitsu_vm_risc_v
         rocjitsu_config
         rocjitsu_dbt_config

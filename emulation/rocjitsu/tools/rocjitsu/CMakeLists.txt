@@ -38,6 +38,10 @@ target_link_libraries(
         # Plugin loader: rj_vm_load_plugins() dlopen()s plugin modules in
         # daemon mode.
         rocjitsu_plugin_loader
+        # Timing core, for the same reason: the daemon loads a timing model
+        # from the config block it was handed.
+        rocjitsu_timing
+        rocjitsu_timing_clock
         rocjitsu_vm_risc_v
         rocjitsu_config
         rocjitsu_dbt_config
