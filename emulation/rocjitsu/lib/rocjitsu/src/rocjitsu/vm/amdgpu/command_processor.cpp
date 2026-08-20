@@ -1699,12 +1699,20 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
       // the queue; the emulator's ROCr instead sets the backing via
       // SET_SCRATCH_BACKING_VA and leaves these fields zero, so the CP fills
       // them here. Field layout per rocdbgapi architecture.cpp
-      // gfx9_architecture_t::scratch_memory_region: waves = tmpring[0:11],
-      // wavesize = tmpring[12:24] * 1024 bytes.
+      // scratch-memory region. The WAVES field is common, while ISA properties
+      // describe the generation-specific WAVESIZE unit and field width.
       if (dp.scratch_backing_addr != 0 && !cus_.empty()) {
         uint64_t per_wave_bytes =
             static_cast<uint64_t>(dp.private_segment_fixed_size) * cus_[0]->wf_size();
-        uint32_t wavesize_kb = static_cast<uint32_t>((per_wave_bytes + 1023) / 1024);
+        // setup_wavefront() allocates scratch slots at a 1 KiB boundary. Encode
+        // that actual stride, rather than merely rounding to the register's
+        // unit, so flat_scratch agrees with rocm-dbgapi for every scoreboard
+        // slot after slot zero.
+        const uint64_t per_wave_stride = ((per_wave_bytes + 1023) / 1024) * 1024;
+        const auto properties = isa_properties(arch);
+        const uint32_t wavesize_unit = properties.compute_tmpring_wavesize_granule;
+        assert(wavesize_unit != 0 && properties.compute_tmpring_wavesize_bits != 0);
+        const uint32_t wavesize_field = static_cast<uint32_t>(per_wave_stride / wavesize_unit);
         // The WAVES field must be a nonzero multiple of the shader-engine-per-XCC
         // count, or rocm-dbgapi disables private access (scratch_memory_region
         // warns and returns size 0). Round the dispatch's wave count up to it.
@@ -1712,7 +1720,9 @@ void CommandProcessor::process_aql_packet(const hsa_kernel_dispatch_packet_t &pk
         uint64_t total_waves = static_cast<uint64_t>(total_wgs) * wfs_per_wg;
         uint32_t waves_field =
             static_cast<uint32_t>(((std::max<uint64_t>(1, total_waves) + se - 1) / se) * se);
-        uint32_t tmpring = (waves_field & 0xFFFu) | ((wavesize_kb & 0x1FFFu) << 12);
+        const uint32_t wavesize_mask =
+            util::mask<uint32_t>(properties.compute_tmpring_wavesize_bits);
+        uint32_t tmpring = (waves_field & 0xFFFu) | ((wavesize_field & wavesize_mask) << 12);
         memory_->write64(scratch_loc_va, dp.scratch_backing_addr, queue.process_id);
         memory_->write32(dp.queue_ptr + offsetof(amd_queue_t, compute_tmpring_size), tmpring,
                          queue.process_id);
