@@ -1670,7 +1670,7 @@ class Marker : public Command {
   bool isMarkerCommand() const override { return true; }
 
   //! The actual command implementation.
-  virtual void submit(device::VirtualDevice& device) { device.submitMarker(*this); }
+  virtual void submit(device::VirtualDevice& device) override { device.submitMarker(*this); }
 };
 
 class AccumulateCommand : public Command {

@@ -243,6 +243,8 @@ namespace amd {
 
 // ================================================================================================
 #if IS_LINUX
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
 __attribute__((optimize("unroll-all-loops"), always_inline)) static inline void nontemporalMemcpy(
     void* __restrict dst, const void* __restrict src, size_t size) {
 #if defined(ATI_ARCH_X86)
@@ -324,6 +326,7 @@ __attribute__((optimize("unroll-all-loops"), always_inline)) static inline void 
   std::memcpy(dst, src, size);
 #endif
 }
+#pragma GCC diagnostic pop
 #else
 static inline void nontemporalMemcpy(void* __restrict dst, const void* __restrict src,
                                      size_t size) {
