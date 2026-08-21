@@ -29,6 +29,7 @@ class BottleneckNode:
     state: Literal["active", "inactive", "indeterminate"]
     supporting: tuple[SupportingMetric, ...]
     children: tuple["BottleneckNode", ...]
+    guidance_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,11 @@ class NodeSpec:
     requires_parent: bool
     requires_siblings_false: tuple[str, ...]
     children: tuple["NodeSpec", ...]
+
+    @property
+    def is_catch_all(self) -> bool:
+        """True when this node activates only if all listed siblings are inactive."""
+        return self.requires_parent and len(self.requires_siblings_false) > 0
 
 
 @dataclass(frozen=True)
