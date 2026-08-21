@@ -55,6 +55,23 @@ _PROFILES = {
 }
 
 
+def _group_isa_additions_args(entries: list[str] | None) -> dict[str, list[str]]:
+    """Group repeated ``NAME:XML`` additions arguments by logical ISA name."""
+    grouped: dict[str, list[str]] = {}
+    for entry in entries or []:
+        if ':' not in entry:
+            raise ValueError(
+                f'--isa-additions entry must be name:xml_path, got: {entry}'
+            )
+        name, xml_path = entry.split(':', 1)
+        if not name or not xml_path:
+            raise ValueError(
+                f'--isa-additions entry must have non-empty name and path, got: {entry}'
+            )
+        grouped.setdefault(name, []).append(xml_path)
+    return grouped
+
+
 def _collect_shared_execute_body_variants(specs, plan):
     """Collect candidate shared execute bodies from each ISA.
 
@@ -142,6 +159,22 @@ def _detect_profile(isa_xml: str) -> str:
 
 def _run_multi(args) -> None:
     """Multi-ISA mode: parse all XMLs, run CrossIsaAnalyzer, generate shared + per-ISA."""
+    try:
+        addition_xmls = _group_isa_additions_args(getattr(args, 'isa_additions', None))
+    except ValueError as error:
+        print(f'error: {error}', file=sys.stderr)
+        sys.exit(1)
+
+    multi_names = {entry.split(':', 1)[0] for entry in args.multi if ':' in entry}
+    unknown_addition_names = set(addition_xmls) - multi_names
+    if unknown_addition_names:
+        names = ', '.join(sorted(unknown_addition_names))
+        print(
+            f'error: --isa-additions names not present in --multi: {names}',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     specs = []
     for entry in args.multi:
         if ':' not in entry:
@@ -155,7 +188,7 @@ def _run_multi(args) -> None:
         if profile_key not in _PROFILES:
             profile_key = _detect_profile(xml_path)
         profile = _PROFILES[profile_key]()
-        spec = Parser(xml_path, profile).parse()
+        spec = Parser(xml_path, profile, addition_xmls.get(name, ())).parse()
         sem = derive_all_semantics(spec)
         specs.append((name, spec, sem))
 
@@ -259,6 +292,14 @@ def main() -> None:
         'Each argument is name:xml_path (e.g., cdna1:/path/to/cdna1.xml).',
     )
     arg_parser.add_argument(
+        '--isa-additions',
+        action='append',
+        default=[],
+        metavar='NAME:XML',
+        help='apply an ISA additions XML file to the named ISA. May be repeated; '
+        'files are applied in command-line order.',
+    )
+    arg_parser.add_argument(
         '--gen-isas',
         action='store_true',
         default=True,
@@ -291,7 +332,18 @@ def main() -> None:
 
     profile_key = _detect_profile(args.isafile)
     profile = _PROFILES[profile_key]()
-    isa = Parser(args.isafile, profile).parse()
+    logical_name = profile.generated_arch_name or profile_key.replace('.', '_')
+    try:
+        addition_xmls = _group_isa_additions_args(args.isa_additions)
+    except ValueError as error:
+        arg_parser.error(str(error))
+    unknown_addition_names = set(addition_xmls) - {logical_name}
+    if unknown_addition_names:
+        names = ', '.join(sorted(unknown_addition_names))
+        arg_parser.error(
+            f'--isa-additions name must match detected ISA {logical_name!r}; got: {names}'
+        )
+    isa = Parser(args.isafile, profile, addition_xmls.get(logical_name, ())).parse()
     semantics = derive_all_semantics(isa)
     config = CodegenConfig()
     if args.gen_isas:
