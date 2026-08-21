@@ -611,15 +611,26 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                             graph_launch_supported ? select_guid_nid_pid("memory_copies")
                                                    : select_guid_nid_pid_3_0_1("memory_copies")};
 
-                        auto graph_launches =
-                            graph_launch_supported
-                                ? std::optional<rocpd::sql_generator<
-                                      rocpd::types::graph_launch>>{std::in_place,
-                                                                   conn,
-                                                                   select_guid_nid_pid(
-                                                                       "graph_launches")}
-                                : std::optional<rocpd::sql_generator<rocpd::types::graph_launch>>{
-                                      std::nullopt};
+                        // Schemas < 3.0.2 lack the graph_launches table/view entirely, so no
+                        // sql_generator can be constructed for it. Default to a valid, empty
+                        // generator and only build the real one below when the schema
+                        // supports it
+                        auto graph_launch_empty_gen =
+                            tool::empty_generator<rocpd::types::graph_launch>{};
+                        auto graph_launch_gen =
+                            std::optional<rocpd::sql_generator<rocpd::types::graph_launch>>{};
+                        const tool::generator<rocpd::types::graph_launch>* graph_launch_ptr =
+                            &graph_launch_empty_gen;
+
+                        if(graph_launch_supported)
+                        {
+                            // Build the real generator and update the pointer to it
+                            graph_launch_gen.emplace(conn, select_guid_nid_pid("graph_launches"));
+                            graph_launch_ptr = &*graph_launch_gen;
+                        }
+
+                        const tool::generator<rocpd::types::graph_launch>& graph_launches =
+                            *graph_launch_ptr;
 
                         auto scratch_memory = rocpd::sql_generator<rocpd::types::scratch_memory>{
                             conn, select_guid_nid_pid("scratch_memory")};
@@ -662,7 +673,7 @@ PYBIND11_MODULE(libpyrocpd, pyrocpd)
                                                       samples,
                                                       kernels,
                                                       memory_copies,
-                                                      graph_launches ? &*graph_launches : nullptr,
+                                                      graph_launches,
                                                       scratch_memory,
                                                       memory_allocations,
                                                       counters);
