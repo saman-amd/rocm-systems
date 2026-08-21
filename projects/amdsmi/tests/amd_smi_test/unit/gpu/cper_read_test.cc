@@ -24,6 +24,10 @@
 // amdsmi_get_gpu_cper_entries_by_path(); no GPU required.
 // ROCM-25398: a zero-byte CPER node must not abort the process.
 // ROCM-25954: an empty ring returns SUCCESS with zero entries, not an error.
+//
+// Also covers the structural bounds of the parser: a crafted record whose
+// sec_cnt, sec_offset, or reg_arr_size points past the buffer must be rejected
+// per section rather than read or written through (CWE-125).
 
 #include <gtest/gtest.h>
 #include <sys/types.h>
@@ -420,4 +424,174 @@ TEST(GpuUnit, CperByPathRejectsInvalidArgs) {
             AMDSMI_STATUS_OUT_OF_RESOURCES);
 
   unlink(path.c_str());
+}
+
+namespace {
+
+// Mirrors the GUID_INIT macro in amd_smi_cper.cc (mixed-endian EFI encoding) so
+// the literals below diff argument-for-argument against the production ones.
+constexpr amdsmi_cper_guid_t MakeGuid(uint32_t a, uint16_t b, uint16_t c, unsigned char d0,
+                                      unsigned char d1, unsigned char d2, unsigned char d3,
+                                      unsigned char d4, unsigned char d5, unsigned char d6,
+                                      unsigned char d7) {
+  return {{static_cast<unsigned char>(a), static_cast<unsigned char>(a >> 8),
+           static_cast<unsigned char>(a >> 16), static_cast<unsigned char>(a >> 24),
+           static_cast<unsigned char>(b), static_cast<unsigned char>(b >> 8),
+           static_cast<unsigned char>(c), static_cast<unsigned char>(c >> 8), d0, d1, d2, d3, d4,
+           d5, d6, d7}};
+}
+
+constexpr amdsmi_cper_guid_t kCrashdumpGuid =  // AMD_OOB_CRASHDUMP
+    MakeGuid(0x32AC0C78, 0x2623, 0x48F6, 0xB0, 0xD0, 0x73, 0x65, 0x72, 0x5F, 0xD6, 0xAE);
+constexpr amdsmi_cper_guid_t kNonStandardGuid =  // AMD_GPU_NONSTANDARD_ERROR
+    MakeGuid(0x32AC0C78, 0x2623, 0x48F6, 0x81, 0xA2, 0xAC, 0x69, 0x17, 0x80, 0x55, 0x1D);
+
+// A zeroed register array under ACA context (reg_ctx_type 1) decodes to this
+// AFID, so any section wired up that way contributes exactly one entry.
+constexpr uint16_t kAcaRegisterContext = 1;
+
+constexpr size_t kDescTableOffset = sizeof(amdsmi_cper_hdr_t);
+
+struct cper_sec_desc* DescAt(std::vector<char>* buf, size_t idx) {
+  return reinterpret_cast<struct cper_sec_desc*>((buf->data() + kDescTableOffset) +
+                                                 (idx * sizeof(struct cper_sec_desc)));
+}
+
+// Fills the header fields the parser requires. record_length and sec_cnt stay
+// caller-controlled because they are what these tests vary.
+void InitHeader(std::vector<char>* buf, uint16_t sec_cnt, uint32_t record_length) {
+  auto* hdr = reinterpret_cast<amdsmi_cper_hdr_t*>(buf->data());
+  std::memcpy(hdr->signature, "CPER", 4);
+  hdr->signature_end = 0xFFFFFFFF;
+  hdr->error_severity = AMDSMI_CPER_SEV_NON_FATAL_UNCORRECTED;
+  hdr->sec_cnt = sec_cnt;
+  hdr->record_length = record_length;
+}
+
+constexpr size_t kCrashdumpSecOffset = (kDescTableOffset + (3 * sizeof(struct cper_sec_desc)));
+constexpr size_t kCrashdumpRecordSize = (kCrashdumpSecOffset + sizeof(struct cper_sec_crashdump));
+
+// [header][desc0][desc1][desc2][crashdump]. desc0 keeps an all-zero (unknown)
+// section type and yields nothing; desc1 and desc2 both decode the crashdump, so
+// the AFID count reports how far the descriptor walk got.
+std::vector<char> MakeCrashdumpRecord(uint32_t record_length) {
+  std::vector<char> buf(kCrashdumpRecordSize, 0);
+  InitHeader(&buf, /*sec_cnt=*/3, record_length);
+  for (size_t i = 1; i < 3; ++i) {
+    struct cper_sec_desc* desc = DescAt(&buf, i);
+    desc->sec_type = kCrashdumpGuid;
+    desc->sec_offset = static_cast<uint32_t>(kCrashdumpSecOffset);
+  }
+  auto* crashdump = reinterpret_cast<struct cper_sec_crashdump*>(buf.data() + kCrashdumpSecOffset);
+  crashdump->data.reg_ctx_type = kAcaRegisterContext;
+  return buf;
+}
+
+// [header][desc0][non-standard section]. reg_arr_size is caller-controlled so a
+// test can claim more registers than reg_dump holds.
+std::vector<char> MakeNonStandardRecord(uint16_t reg_arr_size) {
+  constexpr size_t kSecOffset = (kDescTableOffset + sizeof(struct cper_sec_desc));
+  constexpr size_t kSecSize =
+      (sizeof(struct cper_sec_nonstd_err_hdr) + sizeof(struct cper_sec_nonstd_err_body));
+  std::vector<char> buf(kSecOffset + kSecSize, 0);
+  InitHeader(&buf, /*sec_cnt=*/1, static_cast<uint32_t>(buf.size()));
+
+  struct cper_sec_desc* desc = DescAt(&buf, 0);
+  desc->sec_type = kNonStandardGuid;
+  desc->sec_offset = static_cast<uint32_t>(kSecOffset);
+
+  auto* body = reinterpret_cast<struct cper_sec_nonstd_err_body*>(
+      buf.data() + kSecOffset + sizeof(struct cper_sec_nonstd_err_hdr));
+  body->err_ctx.reg_ctx_type = kAcaRegisterContext;
+  body->err_ctx.reg_arr_size = reg_arr_size;
+  return buf;
+}
+
+}  // namespace
+
+// Positive control for the truncation test below: with record_length covering
+// the whole descriptor table, both crashdump descriptors decode.
+TEST(GpuUnit, CperDecodeDecodesEveryDescriptorInsideTheRecord) {
+  std::vector<char> buf = MakeCrashdumpRecord(static_cast<uint32_t>(kCrashdumpRecordSize));
+  const auto* hdr = reinterpret_cast<const amdsmi_cper_hdr_t*>(buf.data());
+
+  std::vector<int> afids = cper_decode(hdr, buf.size());
+  EXPECT_EQ(afids.size(), 2u);
+}
+
+// The same bytes with record_length claiming only one descriptor. sec_cnt still
+// says three, so an unbounded walk decodes desc1 and desc2 from past the record
+// end (2 AFIDs, as the control above shows); the walk must stop at desc1.
+TEST(GpuUnit, CperDecodeStopsAtTruncatedDescriptorTable) {
+  std::vector<char> buf =
+      MakeCrashdumpRecord(static_cast<uint32_t>(kDescTableOffset + sizeof(struct cper_sec_desc)));
+  const auto* hdr = reinterpret_cast<const amdsmi_cper_hdr_t*>(buf.data());
+
+  std::vector<int> afids = cper_decode(hdr, buf.size());
+  EXPECT_TRUE(afids.empty());
+}
+
+// A descriptor whose sec_offset points far past the buffer must be skipped: the
+// section pointer is out of bounds and must never be dereferenced (CWE-125).
+TEST(GpuUnit, CperDecodeSkipsSectionWithOutOfBoundsOffset) {
+  std::vector<char> buf(kDescTableOffset + sizeof(struct cper_sec_desc), 0);
+  InitHeader(&buf, /*sec_cnt=*/1, static_cast<uint32_t>(buf.size()));
+  struct cper_sec_desc* desc = DescAt(&buf, 0);
+  desc->sec_type = kCrashdumpGuid;
+  desc->sec_offset = 0x7FFFFFFF;  // wildly out of range
+
+  const auto* hdr = reinterpret_cast<const amdsmi_cper_hdr_t*>(buf.data());
+  std::vector<int> afids = cper_decode(hdr, buf.size());
+  EXPECT_TRUE(afids.empty());
+}
+
+// Positive control for the clamp test below: the largest register array the
+// decoder accepts yields one AFID.
+TEST(GpuUnit, CperDecodeDecodesNonStandardSectionWithFullRegisterArray) {
+  std::vector<char> buf = MakeNonStandardRecord(/*reg_arr_size=*/16 * sizeof(uint64_t));
+  const auto* hdr = reinterpret_cast<const amdsmi_cper_hdr_t*>(buf.data());
+
+  std::vector<int> afids = cper_decode(hdr, buf.size());
+  EXPECT_EQ(afids.size(), 1u);
+}
+
+// reg_arr_size claims 8191 registers against a 16-register reg_dump. Clamped, it
+// decodes exactly like the full array above; unclamped, the decoder reads ~64 KB
+// past reg_dump and rejects the length outright, losing the AFID.
+TEST(GpuUnit, CperDecodeClampsOversizedRegisterArraySize) {
+  std::vector<char> buf = MakeNonStandardRecord(/*reg_arr_size=*/0xFFFF);
+  const auto* hdr = reinterpret_cast<const amdsmi_cper_hdr_t*>(buf.data());
+
+  std::vector<int> afids = cper_decode(hdr, buf.size());
+  EXPECT_EQ(afids.size(), 1u);
+}
+
+// A header-only record claiming 64 descriptors: the serial injection walks the
+// descriptor table of the copy it just made, so it must stop at record_length
+// instead of writing fru_id past the copied record.
+TEST(GpuUnit, CperInjectSerialStopsAtRecordEnd) {
+  std::vector<char> blob = MakeOneRecordBlob();
+  reinterpret_cast<amdsmi_cper_hdr_t*>(blob.data())->sec_cnt = 64;
+  std::string path;
+  WriteTempFile(blob, &path);
+  ASSERT_FALSE(path.empty());
+
+  constexpr char kGuard = static_cast<char>(0xAB);
+  std::vector<char> cper_data(8192, kGuard);
+  std::vector<amdsmi_cper_hdr_t*> cper_hdrs(4, nullptr);
+  uint64_t buf_size = cper_data.size();
+  uint64_t entry_count = cper_hdrs.size();
+  uint64_t cursor = 0;
+
+  amdsmi_status_t status = amdsmi_get_gpu_cper_entries_by_path(
+      path.c_str(), 0xFFFFFFFF, cper_data.data(), &buf_size, cper_hdrs.data(), &entry_count,
+      &cursor, /*product_serial=*/1234);
+  unlink(path.c_str());
+
+  EXPECT_EQ(status, AMDSMI_STATUS_SUCCESS);
+  ASSERT_EQ(entry_count, 1u);
+  ASSERT_EQ(buf_size, sizeof(amdsmi_cper_hdr_t));
+  for (size_t i = buf_size; i < cper_data.size(); ++i) {
+    ASSERT_EQ(cper_data[i], kGuard) << "byte " << i << " written past the copied record";
+  }
 }
