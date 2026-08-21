@@ -17,7 +17,7 @@ from rich.text import Text as RichText
 from tabulate import tabulate
 
 import config
-from membw.models import MemBwAnalysisResult
+from membw.models import BottleneckNode, MemBwAnalysisResult
 from utils import mem_chart_gfx9, mem_chart_gfx11, parser, schema
 from utils.kernel_name_shortener import (
     kernel_name_shortener,
@@ -33,6 +33,8 @@ from utils.utils_analysis import (
     simplify_kernel_name,
 )
 from utils.utils_common import convert_filter_blocks_to_panel_ids, is_gfx9, is_gfx115x
+
+_GUIDANCE_PANEL_MIN_WIDTH = 100
 
 
 def _tty_view_is_table(args: argparse.Namespace) -> bool:
@@ -875,6 +877,13 @@ def _render_membw_guidance(
     )
 
 
+def _all_nodes_indeterminate(
+    nodes: tuple[BottleneckNode, ...],
+) -> bool:
+    """True when every root node is indeterminate."""
+    return bool(nodes) and all(n.state == "indeterminate" for n in nodes)
+
+
 def _render_membw_status_line(
     membw_result: MemBwAnalysisResult,
 ) -> str:
@@ -889,10 +898,9 @@ def _render_membw_status_line(
             "Memory Bandwidth Analysis: Partial data "
             f"({membw_result.availability_reason}).\n"
         )
+    if _all_nodes_indeterminate(membw_result.nodes):
+        return "Memory Bandwidth Analysis: Inconclusive (insufficient counter data).\n"
     return "Memory Bandwidth Analysis: No bottlenecks detected (GL1 / GL2 / EA).\n"
-
-
-_GUIDANCE_PANEL_MIN_WIDTH = 100
 
 
 def _style_guidance_block(block: str) -> RichText:
