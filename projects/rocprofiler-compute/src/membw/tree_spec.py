@@ -13,10 +13,9 @@ from membw.models import NodeSpec, TreeSpec
 from utils.logger import console_error
 from utils.utils_common import load_yaml
 
-_VALID_OPS = frozenset({"gte", "gt", "lt", "lte"})
 _VALID_LEVELS = frozenset({"GL1", "GL2", "EA"})
 
-_KNOWN_SCHEMA_HASHES: frozenset[str] = frozenset({"8b5c67d5c4e18966"})
+_KNOWN_SCHEMA_HASHES: frozenset[str] = frozenset({"d6f5598b74092fd5"})
 
 
 def load_tree_spec(arch: str) -> TreeSpec:
@@ -163,12 +162,12 @@ def _validate_node(
     sibling_ids: set[str],
 ) -> None:
     """Validate a single node and recurse into children."""
-    is_catch_all = node.requires_parent and len(node.requires_siblings_false) > 0
-
-    if node.level not in _VALID_LEVELS:
+    if node.level and node.level not in _VALID_LEVELS:
         errors.append(f"Node {node.id!r}: invalid level {node.level!r}")
 
-    if is_catch_all:
+    if node.is_catch_all:
+        if not sibling_ids:
+            errors.append(f"Node {node.id!r}: catch-all node cannot be a root node")
         for sibling_id in node.requires_siblings_false:
             if sibling_id not in sibling_ids:
                 errors.append(
@@ -179,7 +178,11 @@ def _validate_node(
     else:
         if node.metric is None:
             errors.append(f"Node {node.id!r}: non-catch-all node must have a metric")
-        if node.op is not None and node.op not in _VALID_OPS:
+        # lazy loading: engine.py imports tree_spec at module level,
+        # so _OPS is unavailable during tree_spec's initial load.
+        from membw.engine import _OPS
+
+        if node.op is not None and node.op not in _OPS:
             errors.append(f"Node {node.id!r}: invalid op {node.op!r}")
         if node.op is None and node.metric is not None:
             errors.append(f"Node {node.id!r}: has metric but no op")
