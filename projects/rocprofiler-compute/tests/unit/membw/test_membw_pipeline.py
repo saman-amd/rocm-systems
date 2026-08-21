@@ -11,11 +11,7 @@ import pandas as pd
 import pytest
 
 from membw.engine import evaluate_membw_tree
-from membw.metric_extract import (
-    check_metric_availability,
-    extract_metric_units,
-    extract_metric_values,
-)
+from membw.metric_extract import extract_membw_metrics
 from membw.tree_spec import collect_metric_keys, load_tree_spec
 
 # Representative metric values for a UTCL1-stall + HBM-BW-bound workload
@@ -85,20 +81,17 @@ class TestFullPipeline:
         """UTCL1 stall + HBM BW bound active, rest correctly inactive."""
         metric_keys = collect_metric_keys(gfx950_spec)
         dfs = build_mock_dfs(UTCL1_HBM_WORKLOAD)
+        extraction = extract_membw_metrics(dfs, metric_keys)
 
-        avail, reason = check_metric_availability(dfs, metric_keys)
-        assert avail == "full"
-
-        extracted = extract_metric_values(dfs, metric_keys)
-        units = extract_metric_units(dfs)
+        assert extraction.availability == "full"
 
         result = evaluate_membw_tree(
             gfx950_spec,
-            extracted,
+            extraction.values,
             "gfx950",
-            avail,
-            reason,
-            metric_units=units,
+            extraction.availability,
+            extraction.availability_reason,
+            metric_units=extraction.units,
         )
         states = collect_node_states(result.nodes)
 
@@ -158,9 +151,15 @@ class TestFullPipeline:
 
         metric_keys = collect_metric_keys(gfx950_spec)
         dfs = build_mock_dfs(low_values)
-        extracted = extract_metric_values(dfs, metric_keys)
+        extraction = extract_membw_metrics(dfs, metric_keys)
 
-        result = evaluate_membw_tree(gfx950_spec, extracted, "gfx950", "full", None)
+        result = evaluate_membw_tree(
+            gfx950_spec,
+            extraction.values,
+            "gfx950",
+            "full",
+            None,
+        )
         states = collect_node_states(result.nodes)
         assert all(s != "active" for s in states.values())
         assert len(result.guidance_blocks) == 0
@@ -169,7 +168,13 @@ class TestFullPipeline:
         """All root nodes indeterminate when all metrics are None."""
         none_values = {k: None for k in UTCL1_HBM_WORKLOAD}
 
-        result = evaluate_membw_tree(gfx950_spec, none_values, "gfx950", "full", None)
+        result = evaluate_membw_tree(
+            gfx950_spec,
+            none_values,
+            "gfx950",
+            "full",
+            None,
+        )
         for root in result.nodes:
             assert root.state == "indeterminate"
         assert len(result.guidance_blocks) == 0
@@ -178,14 +183,18 @@ class TestFullPipeline:
         """Pipeline handles partial data gracefully."""
         metric_keys = collect_metric_keys(gfx950_spec)
         dfs = {3001: build_mock_dfs(UTCL1_HBM_WORKLOAD)[3001]}
+        extraction = extract_membw_metrics(dfs, metric_keys)
 
-        avail, reason = check_metric_availability(dfs, metric_keys)
-        assert avail == "partial"
+        assert extraction.availability == "partial"
 
-        extracted = extract_metric_values(dfs, metric_keys)
-        result = evaluate_membw_tree(gfx950_spec, extracted, "gfx950", avail, reason)
+        result = evaluate_membw_tree(
+            gfx950_spec,
+            extraction.values,
+            "gfx950",
+            extraction.availability,
+            extraction.availability_reason,
+        )
         states = collect_node_states(result.nodes)
         assert states["gl1_tcp_stall"] == "active"
-        # L2/EA nodes should be indeterminate -- no data in tables 3012/3018
         assert states["gl2_back_pressure"] == "indeterminate"
         assert states["ea_hbm_bw_bound"] == "indeterminate"

@@ -8,13 +8,9 @@ from typing import Callable, Optional
 
 import pandas as pd
 
-from membw.debug import print_evaluation_summary, print_evaluation_trace
+from membw.debug import log_evaluation_summary, log_evaluation_trace
 from membw.guidance import render_guidance_blocks
-from membw.metric_extract import (
-    check_metric_availability,
-    extract_metric_units,
-    extract_metric_values,
-)
+from membw.metric_extract import extract_membw_metrics
 from membw.models import (
     MEMBW_TABLE_IDS,
     BottleneckNode,
@@ -26,7 +22,6 @@ from membw.models import (
 from membw.tree_spec import collect_metric_keys, load_tree_spec
 from utils.logger import console_warning
 
-# YAML specs use SQL-style names (gte, lte); operator module uses ge, le.
 _OPS: dict[str, Callable[[float, float], bool]] = {
     "gte": operator.ge,
     "gt": operator.gt,
@@ -60,7 +55,7 @@ def evaluate_membw_tree(
         )
         evaluated_roots.append(node)
 
-    guidance_ids = _collect_active_leaf_guidance_ids(tuple(evaluated_roots), tree_spec)
+    guidance_ids = _collect_active_leaf_guidance_ids(tuple(evaluated_roots))
     guidance_blocks = render_guidance_blocks(
         guidance_ids,
         tree_spec.guidance_templates,
@@ -76,8 +71,6 @@ def evaluate_membw_tree(
         nodes=tuple(evaluated_roots),
         guidance_blocks=guidance_blocks,
     )
-
-    print_evaluation_summary(result)
 
     return result
 
@@ -98,20 +91,18 @@ def run_membw_analysis(
         return None
 
     metric_keys = collect_metric_keys(tree_spec)
-    metric_values = extract_metric_values(membw_dfs, metric_keys)
-    metric_units = extract_metric_units(membw_dfs)
-    availability, availability_reason = check_metric_availability(
-        membw_dfs, metric_keys
-    )
+    extraction = extract_membw_metrics(membw_dfs, metric_keys)
 
-    return evaluate_membw_tree(
+    result = evaluate_membw_tree(
         tree_spec,
-        metric_values,
+        extraction.values,
         gpu_arch,
-        availability,
-        availability_reason,
-        metric_units=metric_units,
+        extraction.availability,
+        extraction.availability_reason,
+        metric_units=extraction.units,
     )
+    log_evaluation_summary(result)
+    return result
 
 
 # --- Private helpers ---
@@ -125,14 +116,10 @@ def _evaluate_node(
     sibling_states: dict[str, str],
 ) -> BottleneckNode:
     """Evaluate a single node and recursively evaluate children."""
-    is_catch_all = (
-        node_spec.requires_parent and len(node_spec.requires_siblings_false) > 0
-    )
-
-    if is_catch_all:
+    if node_spec.is_catch_all:
         state, reason = _evaluate_catch_all(node_spec, sibling_states)
         supporting: tuple[SupportingMetric, ...] = ()
-        print_evaluation_trace(
+        log_evaluation_trace(
             node_id=node_spec.id,
             metric_key=None,
             metric_value=None,
@@ -166,6 +153,7 @@ def _evaluate_node(
         state=state,
         supporting=supporting,
         children=children,
+        guidance_id=node_spec.guidance_id,
     )
 
 
@@ -180,9 +168,7 @@ def _evaluate_metric_node(
     if metric_key is None:
         state = "indeterminate"
         reason = "no metric defined"
-        print_evaluation_trace(
-            node_spec.id, None, None, None, None, None, state, reason
-        )
+        log_evaluation_trace(node_spec.id, None, None, None, None, None, state, reason)
         return (state, reason, ())
 
     value = metric_values.get(metric_key)
@@ -210,7 +196,7 @@ def _evaluate_metric_node(
             state = "inactive"
             reason = ""
 
-    print_evaluation_trace(
+    log_evaluation_trace(
         node_id=node_spec.id,
         metric_key=metric_key,
         metric_value=value,
@@ -254,10 +240,7 @@ def _evaluate_siblings(
     catch_all_siblings = []
 
     for sibling in siblings:
-        is_catch_all = (
-            sibling.requires_parent and len(sibling.requires_siblings_false) > 0
-        )
-        if is_catch_all:
+        if sibling.is_catch_all:
             catch_all_siblings.append(sibling)
         else:
             metric_siblings.append(sibling)
@@ -307,6 +290,7 @@ def _make_inactive_subtree(node_spec: NodeSpec) -> BottleneckNode:
         state="inactive",
         supporting=(),
         children=children,
+        guidance_id=node_spec.guidance_id,
     )
 
 
@@ -328,18 +312,15 @@ def _build_supporting_metric(
 
 def _collect_active_leaf_guidance_ids(
     nodes: tuple[BottleneckNode, ...],
-    tree_spec: TreeSpec,
 ) -> list[str]:
     """Collect guidance_ids from active leaf nodes."""
-    spec_map = _build_spec_map(tree_spec.roots)
     result: list[str] = []
-    _walk_for_guidance(nodes, spec_map, result)
+    _walk_for_guidance(nodes, result)
     return result
 
 
 def _walk_for_guidance(
     nodes: tuple[BottleneckNode, ...],
-    spec_map: dict[str, NodeSpec],
     result: list[str],
 ) -> None:
     """Recursively walk evaluated nodes for guidance IDs."""
@@ -347,23 +328,6 @@ def _walk_for_guidance(
         if node.state != "active":
             continue
         has_active_child = any(child.state == "active" for child in node.children)
-        spec = spec_map.get(node.id)
-        guidance_id = spec.guidance_id if spec is not None else None
-        if not has_active_child and guidance_id is not None:
-            result.append(guidance_id)
-        _walk_for_guidance(node.children, spec_map, result)
-
-
-def _build_spec_map(roots: tuple[NodeSpec, ...]) -> dict[str, NodeSpec]:
-    """Build a flat id->NodeSpec mapping for lookup."""
-    result: dict[str, NodeSpec] = {}
-    for root in roots:
-        _add_to_spec_map(root, result)
-    return result
-
-
-def _add_to_spec_map(node: NodeSpec, result: dict[str, NodeSpec]) -> None:
-    """Recursively add nodes to the spec map."""
-    result[node.id] = node
-    for child in node.children:
-        _add_to_spec_map(child, result)
+        if not has_active_child and node.guidance_id is not None:
+            result.append(node.guidance_id)
+        _walk_for_guidance(node.children, result)

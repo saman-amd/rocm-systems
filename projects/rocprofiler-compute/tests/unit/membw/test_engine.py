@@ -120,6 +120,31 @@ class TestParentGating:
         )
         assert result.nodes[0].children[0].state == "inactive"
 
+    def test_indeterminate_parent_forces_children_inactive(self):
+        child = make_node(
+            "c",
+            metric="m2",
+            op="gte",
+            threshold_key="stall_pct_high",
+        )
+        parent = make_node(
+            "p",
+            metric="m1",
+            op="gte",
+            threshold_key="stall_pct_high",
+            children=[child],
+        )
+        spec = make_tree_spec([parent])
+        result = evaluate_membw_tree(
+            spec,
+            {"m2": 15.0},
+            "gfx950",
+            "full",
+            None,
+        )
+        assert result.nodes[0].state == "indeterminate"
+        assert result.nodes[0].children[0].state == "inactive"
+
 
 class TestSiblingExclusion:
     def test_catch_all_active_when_all_siblings_inactive(self):
