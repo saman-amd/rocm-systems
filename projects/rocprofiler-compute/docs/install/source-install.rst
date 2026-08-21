@@ -81,7 +81,7 @@ follows.
       - Should be ON to enable testing from the installation location without dependency on the source directory.
 
     * - ``SKIP_NATIVE_TOOL_BUILD``
-      - Should be ON to skip building the native profiling tool and the ``torch_trace_collector`` extension. When enabled, both are compiled at runtime instead of build time, from the installed sources. This is useful when ROCprofiler-SDK is not available during build time.
+      - Should be ON to skip building the native profiling tool and the ``torch_trace_collector`` extension. When enabled, the ``src/lib`` sources are installed instead of the libraries, and both are compiled at runtime on first use. This is useful when ROCprofiler-SDK is not available during build time, and it is also what lets the ``torch_trace_collector`` extension be rebuilt for a Python or PyTorch version other than the one it was built against.
 
     * - ``BUILD_TORCH_TRACE_COLLECTOR``
       - Controls the build of the ``torch_trace_collector`` extension, which
