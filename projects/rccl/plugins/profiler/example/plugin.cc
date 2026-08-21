@@ -365,6 +365,12 @@ static void printAllEvents(FILE* fh, struct context* ctx) {
     printEvent(fh, &ctx->groupApiPool[i % groupApiPoolSize]);
   }
 
+  start = (ctx->groupPoolIndex - groupPoolSize >= 0) ? ctx->groupPoolIndex - groupPoolSize : 0;
+  end = ctx->groupPoolIndex;
+  for (int i = start; i < end; i++) {
+    printGroupEventSpan(fh, &ctx->groupPool[i % groupPoolSize]);
+  }
+
   start = (ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize >= 0) ? ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize : 0;
   end = ctx->proxyCtrlPoolIndex;
   for (int i = start; i < end; i++) {
@@ -578,7 +584,8 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     __atomic_fetch_add(&parent->refCount, 1, __ATOMIC_RELAXED);
     *eHandle = event;
   } else if (eDescr->type == ncclProfileGroup) {
-    if (eDescr->parentObj == NULL) return ncclSuccess;
+    // Group events carry no parent: RCCL starts them from the plan with a zeroed
+    // descriptor, and struct group has no parent field to record one.
     struct group* event;
     int groupId = __atomic_fetch_add(&ctx->groupPoolIndex, 1, __ATOMIC_RELAXED);
     if ((groupId - __atomic_load_n(&ctx->groupPoolBase, __ATOMIC_RELAXED)) < groupPoolSize) {
