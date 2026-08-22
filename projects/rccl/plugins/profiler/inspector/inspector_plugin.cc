@@ -159,6 +159,8 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
  *
  */
 __hidden ncclResult_t inspectorPluginFinalize(void* context) {
+  // Dump before inspectorDelComm(), which clears this communicator's dump flags.
+  inspectorDumpNow();
   inspectorDelComm((struct inspectorCommInfo *)context);
   pthread_mutex_lock(&gLock);
   if (--gInitialized == 0) {
