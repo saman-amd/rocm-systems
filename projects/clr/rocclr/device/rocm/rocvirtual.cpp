@@ -1792,6 +1792,20 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const amd::AlignedVector64<uint8_t>&
   auto* first_loc = reinterpret_cast<uint32_t*>(
       queueBase + (startIndex & queueMask) * kPacketSize);
 
+  // A pre-patched packet already carries the completion signal ApplyHwEventPatches
+  // wrote, so it never goes through ActiveSignal and nothing has registered it with
+  // the Timestamp.  Index the command's HW events by HSA handle so the packet walk
+  // below can register each one from its own packet, in dispatch order.
+  std::unordered_map<uint64_t, ProfilingSignal*> prePatchedSignals;
+  if (pre_patched && timestamp_ != nullptr) {
+    for (const auto& [hw_device, hw_events] : vcmd->getHwEvents()) {
+      for (void* hw_event : hw_events) {
+        auto* signal = reinterpret_cast<ProfilingSignal*>(hw_event);
+        prePatchedSignals.emplace(signal->signal_.handle, signal);
+      }
+    }
+  }
+
   // Attach profiling / completion signals to one packet.  Used by the MOVDIR64B path,
   // which assembles the full packet (body + signal + valid header) in a host staging
   // buffer before the atomic 64B store, so signals must be written into |pkt| (staging)
@@ -1808,10 +1822,13 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const amd::AlignedVector64<uint8_t>&
         (pktType == HSA_PACKET_TYPE_VENDOR_SPECIFIC &&
          amdFormat == HSA_AMD_PACKET_TYPE_EXT_KERNEL_DISPATCH);
     if (timestamp_ != nullptr) {
-      // When pre_patched, keep any completion_signal already written by
-      // ApplyHwEventPatches (carried into staging via the flat-buffer copy).
-      bool has_prepatched_signal = pre_patched && (pkt->completion_signal.handle != 0);
-      if (!has_prepatched_signal) {
+      // Read the pre-patched completion signal from the host-side flat buffer, not
+      // from |pkt|: on the NT path |pkt| is the write-combining ring slot, which
+      // cannot be read back reliably.
+      const auto* hostPkt = reinterpret_cast<const hsa_kernel_dispatch_packet_t*>(
+          flatPacketData.data() + i * kPacketSize);
+      const uint64_t prePatchedHandle = pre_patched ? hostPkt->completion_signal.handle : 0;
+      if (prePatchedHandle == 0) {
         pkt->completion_signal =
             Barriers().ActiveSignal(kInitSignalValueOne, timestamp_, true);
         if (isKernelDispatch) {
@@ -1820,9 +1837,27 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const amd::AlignedVector64<uint8_t>&
           }
           Barriers().GetLastSignal()->flags_.isPacketDispatch_ = true;
         }
-      } else if (has_prepatched_signal && isBaseKernelDispatch &&
-                 amd::activity_prof::IsEnabled(OP_ID_DISPATCH)) {
-        pkt->reserved2 = timestamp_->command().profilingInfo().correlation_id_;
+      } else {
+        // Keep the completion_signal ApplyHwEventPatches already wrote (carried into
+        // staging via the flat-buffer copy), and register it with the Timestamp from
+        // here rather than in bulk at submit time.  ActiveSignal registers a regular
+        // dispatch's signal at this same point, so doing it here keeps signals in
+        // packet order — which is the order the kernel names are recorded in, and
+        // the order AccumulateCommand pairs the two by.
+        if (isBaseKernelDispatch && amd::activity_prof::IsEnabled(OP_ID_DISPATCH)) {
+          pkt->reserved2 = timestamp_->command().profilingInfo().correlation_id_;
+        }
+        auto it = prePatchedSignals.find(prePatchedHandle);
+        if (it != prePatchedSignals.end()) {
+          // Classify from the header of the packet actually carrying the signal.
+          // ApplyHwEventPatches derives isPacketDispatch_ from the packet the patch
+          // was built against, but rebuildFilteredLists relocates the signal when
+          // nodes are disabled — onto a standalone barrier if every node packet in
+          // the batch is disabled.  A barrier left classified as a dispatch yields a
+          // timing that no kernel name accounts for, shifting every later pairing.
+          it->second->flags_.isPacketDispatch_ = isKernelDispatch;
+          timestamp_->AddProfilingSignal(it->second);
+        }
       }
     } else if (isLast && (attach_signal || blocking)) {
       pkt->completion_signal = Barriers().ActiveSignal();
@@ -1839,8 +1874,8 @@ bool VirtualGPU::dispatchAqlPacketBatchFlat(const amd::AlignedVector64<uint8_t>&
   // from the ring slot: the device-resident ring is write-combining, so reading
   // kernel_object back from it is unreliable.  Kernel names are resolved from the device
   // KernelMap by kernel_object and, when activity tracing is on, recorded into the command
-  // via addKernelName().  getDemangledName() returns a reference to a name cached for the
-  // device's lifetime, so the borrowed pointer stays valid.
+  // via addKernelName().  The borrowed pointer stays valid until the command reports its
+  // activity: __hipUnregisterFatBinary syncs every stream before removing a code object.
   auto logBatchPacket = [&](size_t i, uint64_t slotIdx) {
     const auto* hostPkt = reinterpret_cast<const hsa_kernel_dispatch_packet_t*>(
         flatPacketData.data() + i * kPacketSize);
@@ -5238,21 +5273,6 @@ void VirtualGPU::submitAccumulate(amd::AccumulateCommand& vcmd) {
   // Make sure VirtualGPU has an exclusive access to the resources
   std::scoped_lock lock(execution());
   profilingBegin(vcmd);
-
-  // Register pre-patched HW event signals with the Timestamp for profiling.
-  // These signals were configured by ApplyHwEventPatches (isPacketDispatch_,
-  // done_ flags set there) but bypass ActiveSignal, so they must be added
-  // here so checkGpuTime → ExtractSignalTiming → addTimestamps picks them up.
-  if (timestamp_ != nullptr) {
-    for (const auto& [_, events] : vcmd.getHwEvents()) {
-      for (void* hw_event : events) {
-        auto* ps = reinterpret_cast<ProfilingSignal*>(hw_event);
-        if (ps != nullptr) {
-          timestamp_->AddProfilingSignal(ps);
-        }
-      }
-    }
-  }
 
   const Settings& settings = dev().settings();
   if (settings.barrier_value_packet_) {
