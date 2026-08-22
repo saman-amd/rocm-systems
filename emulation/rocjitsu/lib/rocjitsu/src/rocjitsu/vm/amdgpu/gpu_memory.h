@@ -65,6 +65,27 @@ static_assert(KfdProcess::kPageSize == simdojo::SparseMemory::PAGE_SIZE,
 /// hierarchy.
 class GpuMemory : public simdojo::SparseMemory {
 public:
+  class PageTableRequestGuard {
+  public:
+    PageTableRequestGuard() = default;
+    PageTableRequestGuard(PageTableRequestGuard &&) noexcept = default;
+    PageTableRequestGuard &operator=(PageTableRequestGuard &&) noexcept = default;
+    PageTableRequestGuard(const PageTableRequestGuard &) = delete;
+    PageTableRequestGuard &operator=(const PageTableRequestGuard &) = delete;
+
+    bool owns_lock() const { return lock_.owns_lock(); }
+
+  private:
+    friend class GpuMemory;
+
+    explicit PageTableRequestGuard(std::shared_ptr<std::shared_mutex> mutex)
+        : mutex_(std::move(mutex)),
+          lock_(mutex_ ? std::shared_lock(*mutex_) : std::shared_lock<std::shared_mutex>{}) {}
+
+    std::shared_ptr<std::shared_mutex> mutex_;
+    std::shared_lock<std::shared_mutex> lock_;
+  };
+
   explicit GpuMemory(std::string name)
       : simdojo::SparseMemory(std::move(name)),
         // Function-static TLS translation caches may outlive a GpuMemory on a
@@ -90,8 +111,11 @@ public:
   /// @brief Register a process's page table in the VMID table.
   /// @param generation Optional mutation counter used by translation caches.
   ///        Omitting it disables the per-thread fast path for this page table.
+  /// @param request_mutex Optional lease that stabilizes batched page-table
+  ///        lookups. Omitting it disables cross-chunk MTYPE reuse.
   void register_process(uint32_t pid, KfdProcess::PageTable *pt, std::shared_mutex *mu,
-                        const uint64_t *generation = nullptr) {
+                        const uint64_t *generation = nullptr,
+                        std::shared_ptr<std::shared_mutex> request_mutex = {}) {
     util::Logger::cp("VMID_REG pid=", pid, " mem=0x", std::hex, reinterpret_cast<uintptr_t>(this),
                      std::dec, " pt_size=", pt->size());
     std::unique_lock lk(vmid_mutex_);
@@ -101,10 +125,28 @@ public:
         .client_pid = 0,
         .client_mem_fd = {},
         .generation = generation,
+        .request_mutex = std::move(request_mutex),
     };
     // The VMID may now select a different page table even though neither page
     // table changed. Invalidate TLS entries that cached the old registration.
     ++vmid_registry_generation_;
+  }
+
+  /// @brief Stabilize a registered process's page table for one L1 request.
+  /// @details Page-table mutations take the exclusive side of this lease before
+  /// the ordinary page-table lock. Backing-memory accesses can therefore keep
+  /// taking the ordinary shared lock without recursive locking.
+  PageTableRequestGuard acquire_page_table_request(uint32_t vmid) const {
+    if (vmid == 0)
+      return {};
+    std::shared_ptr<std::shared_mutex> request_mutex;
+    {
+      std::shared_lock lock(vmid_mutex_);
+      auto it = vmid_table_.find(vmid);
+      if (it != vmid_table_.end())
+        request_mutex = it->second.request_mutex;
+    }
+    return PageTableRequestGuard(std::move(request_mutex));
   }
 
   /// @brief Unregister a process from the VMID table.
@@ -857,6 +899,7 @@ private:
     /// Debugger-authorized /proc/<target>/mem fd, or empty.
     util::UniqueHandle client_mem_fd;
     const uint64_t *generation = nullptr;
+    std::shared_ptr<std::shared_mutex> request_mutex;
   };
 
   struct PteCache {

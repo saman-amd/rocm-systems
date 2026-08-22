@@ -6,6 +6,7 @@
 #include "rocjitsu/vm/amdgpu/device_cache_coherence.h"
 #include "rocjitsu/vm/amdgpu/gpu_memory.h"
 #include "rocjitsu/vm/amdgpu/l2_cache.h"
+#include "rocjitsu/vm/amdgpu/request_mtype_resolver.h"
 
 #include <algorithm>
 #include <cassert>
@@ -49,6 +50,7 @@ void L1ScalarCache::ensure_line_locked(uint64_t addr, uint32_t vmid) {
 void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *src, uint32_t vmid) {
   auto coherence_guard = DeviceCacheCoherence::instance().acquire_l1_access();
   synchronize_epoch_locked();
+  RequestMtypeResolver mtypes(memory_, vmid);
   for (uint32_t i = 0; i < num_dwords; ++i) {
     uint64_t ea = addr + i * 4;
     uint8_t buf[4];
@@ -60,9 +62,7 @@ void L1ScalarCache::store(uint64_t addr, uint32_t num_dwords, const uint32_t *sr
       const uint32_t chunk =
           std::min<uint32_t>(sizeof(buf) - copied, CacheStore::LINE_SIZE - line_offset);
 
-      Mtype mtype = Mtype::RW;
-      if (memory_)
-        mtype = memory_->pte_mtype(chunk_addr, vmid);
+      const Mtype mtype = mtypes.at(chunk_addr);
 
       if (mtype == Mtype::UC) {
         flush_line_locked(chunk_addr, vmid);
@@ -125,6 +125,7 @@ void L1ScalarCache::flush_line_locked(uint64_t addr, uint32_t vmid) {
 void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint32_t vmid) {
   auto coherence_guard = DeviceCacheCoherence::instance().acquire_l1_access();
   synchronize_epoch_locked();
+  RequestMtypeResolver mtypes(memory_, vmid);
   for (uint32_t i = 0; i < num_dwords; ++i) {
     uint64_t ea = addr + i * 4;
     uint8_t buf[4]{};
@@ -135,9 +136,7 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
       const uint32_t chunk =
           std::min<uint32_t>(sizeof(buf) - copied, CacheStore::LINE_SIZE - line_offset);
 
-      Mtype mtype = Mtype::RW;
-      if (memory_)
-        mtype = memory_->pte_mtype(chunk_addr, vmid);
+      const Mtype mtype = mtypes.at(chunk_addr);
 
       if (mtype == Mtype::UC) {
         flush_line_locked(chunk_addr, vmid);
@@ -158,15 +157,14 @@ void L1ScalarCache::load(uint64_t addr, uint32_t num_dwords, uint32_t *dst, uint
 void L1ScalarCache::load_bytes(uint64_t addr, uint32_t num_bytes, uint8_t *dst, uint32_t vmid) {
   auto coherence_guard = DeviceCacheCoherence::instance().acquire_l1_access();
   synchronize_epoch_locked();
+  RequestMtypeResolver mtypes(memory_, vmid);
   uint32_t copied = 0;
   while (copied < num_bytes) {
     uint64_t ea = addr + copied;
     uint32_t line_offset = CacheStore::line_offset(ea);
     uint32_t chunk = std::min(num_bytes - copied, CacheStore::LINE_SIZE - line_offset);
 
-    Mtype mtype = Mtype::RW;
-    if (memory_)
-      mtype = memory_->pte_mtype(ea, vmid);
+    const Mtype mtype = mtypes.at(ea);
 
     if (mtype == Mtype::UC) {
       flush_line_locked(ea, vmid);
