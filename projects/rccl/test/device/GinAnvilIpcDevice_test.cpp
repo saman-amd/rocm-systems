@@ -211,10 +211,10 @@ TEST_F(GinAnvilIpcDeviceTest, DetailHelpers_ChannelAndDirty) {
   d_fused.zero();
   d_dirtyRead.zero();
 
-  kernelDetailHelpers<<<1, 1>>>(d_ctx.ptr, 128, d_eff.ptr, d_fused.ptr, d_dirtyRead.ptr);
+  kernelDetailHelpers<<<1, 1>>>(d_ctx.ptr, 6, d_eff.ptr, d_fused.ptr, d_dirtyRead.ptr);
   syncAndCheck();
 
-  EXPECT_EQ(d_eff.download(), 2);  // (0 + 1*(128/64)) % 4 == 2
+  EXPECT_EQ(d_eff.download(), 2);  // (0 + 1*6) % 4 == 2
   hipDeviceProp_t prop{};
   ASSERT_EQ(hipSuccess, hipGetDeviceProperties(&prop, 0));
   const bool oss7 = (std::strstr(prop.gcnArchName, "gfx950") != nullptr);
