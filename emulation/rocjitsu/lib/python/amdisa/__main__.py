@@ -22,6 +22,7 @@ from amdisa import (
     Rdna3Profile,
     Rdna3_5Profile,
     Rdna4Profile,
+    load_isa_variants,
 )
 from amdisa import xml_schema as xs
 from amdisa.cross_isa import CrossIsaAnalyzer
@@ -69,6 +70,26 @@ def _group_isa_additions_args(entries: list[str] | None) -> dict[str, list[str]]
                 f'--isa-additions entry must have non-empty name and path, got: {entry}'
             )
         grouped.setdefault(name, []).append(xml_path)
+    return grouped
+
+
+def _group_isa_variant_args(entries: list[str] | None) -> dict[str, str]:
+    """Group one ``NAME:JSON`` variant manifest per logical ISA name."""
+    grouped: dict[str, str] = {}
+    for entry in entries or []:
+        if ':' not in entry:
+            raise ValueError(
+                f'--isa-variants entry must be name:json_path, got: {entry}'
+            )
+        name, json_path = entry.split(':', 1)
+        if not name or not json_path:
+            raise ValueError(
+                '--isa-variants entry must have non-empty name and path, '
+                f'got: {entry}'
+            )
+        if name in grouped:
+            raise ValueError(f'--isa-variants repeated for ISA {name!r}')
+        grouped[name] = json_path
     return grouped
 
 
@@ -161,6 +182,7 @@ def _run_multi(args) -> None:
     """Multi-ISA mode: parse all XMLs, run CrossIsaAnalyzer, generate shared + per-ISA."""
     try:
         addition_xmls = _group_isa_additions_args(getattr(args, 'isa_additions', None))
+        variant_jsons = _group_isa_variant_args(getattr(args, 'isa_variants', None))
     except ValueError as error:
         print(f'error: {error}', file=sys.stderr)
         sys.exit(1)
@@ -171,6 +193,14 @@ def _run_multi(args) -> None:
         names = ', '.join(sorted(unknown_addition_names))
         print(
             f'error: --isa-additions names not present in --multi: {names}',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    unknown_variant_names = set(variant_jsons) - multi_names
+    if unknown_variant_names:
+        names = ', '.join(sorted(unknown_variant_names))
+        print(
+            f'error: --isa-variants names not present in --multi: {names}',
             file=sys.stderr,
         )
         sys.exit(1)
@@ -189,6 +219,8 @@ def _run_multi(args) -> None:
             profile_key = _detect_profile(xml_path)
         profile = _PROFILES[profile_key]()
         spec = Parser(xml_path, profile, addition_xmls.get(name, ())).parse()
+        if variant_path := variant_jsons.get(name):
+            load_isa_variants(spec, variant_path)
         sem = derive_all_semantics(spec)
         specs.append((name, spec, sem))
 
@@ -300,6 +332,13 @@ def main() -> None:
         'files are applied in command-line order.',
     )
     arg_parser.add_argument(
+        '--isa-variants',
+        action='append',
+        default=[],
+        metavar='NAME:JSON',
+        help='attach one target-feature/legality manifest to the named ISA.',
+    )
+    arg_parser.add_argument(
         '--gen-isas',
         action='store_true',
         default=True,
@@ -335,6 +374,7 @@ def main() -> None:
     logical_name = profile.generated_arch_name or profile_key.replace('.', '_')
     try:
         addition_xmls = _group_isa_additions_args(args.isa_additions)
+        variant_jsons = _group_isa_variant_args(args.isa_variants)
     except ValueError as error:
         arg_parser.error(str(error))
     unknown_addition_names = set(addition_xmls) - {logical_name}
@@ -343,7 +383,16 @@ def main() -> None:
         arg_parser.error(
             f'--isa-additions name must match detected ISA {logical_name!r}; got: {names}'
         )
+    unknown_variant_names = set(variant_jsons) - {logical_name}
+    if unknown_variant_names:
+        names = ', '.join(sorted(unknown_variant_names))
+        arg_parser.error(
+            '--isa-variants name must match detected ISA '
+            f'{logical_name!r}; got: {names}'
+        )
     isa = Parser(args.isafile, profile, addition_xmls.get(logical_name, ())).parse()
+    if variant_path := variant_jsons.get(logical_name):
+        load_isa_variants(isa, variant_path)
     semantics = derive_all_semantics(isa)
     config = CodegenConfig()
     if args.gen_isas:

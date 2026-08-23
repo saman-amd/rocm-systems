@@ -777,6 +777,69 @@ TEST(BinaryTranslatorE2E, EmptyTextSameArchIsSuccessfulNoOp) {
             "unchanged");
 }
 
+TEST(BinaryTranslatorE2E, RejectsUnsupportedGfx1251ToGfx1250Translation) {
+  auto image = make_minimal_amdgpu_elf_with_text_and_rodata();
+  auto header = read_elf_struct_for_test<Elf64_Ehdr>(image, 0);
+  header.e_flags = EF_AMDGPU_MACH_AMDGCN_GFX1251;
+  write_elf_struct_for_test(image, 0, header);
+  AmdGpuCodeObject source(image.data(), image.size());
+  ASSERT_TRUE(source.is_valid());
+  ASSERT_EQ(source.target_id(), ROCJITSU_CODE_TARGET_GFX1251);
+
+  BinaryTranslator translator(ROCJITSU_CODE_ARCH_CDNA5, ROCJITSU_CODE_ARCH_CDNA5,
+                              EF_AMDGPU_MACH_AMDGCN_GFX1250);
+  const auto result = translator.translate(source);
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(std::ranges::any_of(result.diagnostics, [](const auto &diagnostic) {
+    return diagnostic.message == "cross-variant gfx1250/gfx1251 translation is not implemented";
+  })) << (result.diagnostics.empty() ? "" : result.diagnostics.front().message);
+}
+
+TEST(BinaryTranslatorE2E, PreservesGfx1251IdentityForSameTargetDataOnlyObject) {
+  auto image = make_minimal_gfx1250_elf_with_empty_text_and_rodata();
+  auto header = read_elf_struct_for_test<Elf64_Ehdr>(image, 0);
+  header.e_flags = EF_AMDGPU_MACH_AMDGCN_GFX1251;
+  write_elf_struct_for_test(image, 0, header);
+  AmdGpuCodeObject source(image.data(), image.size());
+  ASSERT_TRUE(source.is_valid());
+  ASSERT_EQ(source.target_id(), ROCJITSU_CODE_TARGET_GFX1251);
+
+  BinaryTranslator translator(ROCJITSU_CODE_ARCH_CDNA5, ROCJITSU_CODE_ARCH_CDNA5,
+                              EF_AMDGPU_MACH_AMDGCN_GFX1251);
+  const auto result = translator.translate(source);
+
+  ASSERT_TRUE(result.ok()) << (result.diagnostics.empty() ? ""
+                                                          : result.diagnostics.front().message);
+  EXPECT_EQ(result.elf_bytes, image);
+  const auto output_header = read_elf_struct_for_test<Elf64_Ehdr>(result.elf_bytes, 0);
+  EXPECT_EQ(output_header.e_flags & EF_AMDGPU_MACH, EF_AMDGPU_MACH_AMDGCN_GFX1251);
+}
+
+TEST(BinaryTranslatorE2E, UsesGfx1251DecoderForSameTargetExecutableObject) {
+  const std::vector<uint32_t> kText = {
+      0xCC4B4004u, // v_pk_add_f64 v[4:7], v[8:11], v[12:15]
+      0x1A021908u,
+      0xBFB00000u, // s_endpgm
+  };
+  auto image = make_minimal_amdgpu_elf_with_descriptor_after_text(kText);
+  auto header = read_elf_struct_for_test<Elf64_Ehdr>(image, 0);
+  header.e_flags = EF_AMDGPU_MACH_AMDGCN_GFX1251;
+  write_elf_struct_for_test(image, 0, header);
+  AmdGpuCodeObject source(image.data(), image.size());
+  ASSERT_TRUE(source.is_valid());
+  ASSERT_EQ(source.target_id(), ROCJITSU_CODE_TARGET_GFX1251);
+
+  BinaryTranslator translator(ROCJITSU_CODE_ARCH_CDNA5, ROCJITSU_CODE_ARCH_CDNA5,
+                              EF_AMDGPU_MACH_AMDGCN_GFX1251);
+  const auto result = translator.translate(source);
+
+  ASSERT_TRUE(result.ok()) << (result.diagnostics.empty() ? ""
+                                                          : result.diagnostics.front().message);
+  const auto output_header = read_elf_struct_for_test<Elf64_Ehdr>(result.elf_bytes, 0);
+  EXPECT_EQ(output_header.e_flags & EF_AMDGPU_MACH, EF_AMDGPU_MACH_AMDGCN_GFX1251);
+}
+
 TEST(BinaryTranslatorE2E, TruncatedImageFailsBeforeReadingElfHeader) {
   const std::array<uint8_t, sizeof(Elf64_Ehdr) - 1> image{};
   AmdGpuCodeObject source(image.data(), image.size());

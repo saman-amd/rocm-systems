@@ -3492,6 +3492,38 @@ def test_split_execution_ids_name_and_match_callbacks(
         assert sorted(selected_ids) == sorted(callbacks)
 
 
+def test_cdna5_model_only_variant_instructions_have_no_execution_callbacks(
+    gfx1250_generated_root: Path,
+) -> None:
+    model_only_classes = (
+        'VPkFmaF64Vop3p',
+        'VPkMulF64Vop3p',
+        'VPkAddF64Vop3p',
+        'VPkAddNcU64Vop3p',
+        'VPkSubNcU64Vop3p',
+        'VPkMaxNumF64Vop3p',
+        'VPkMinNumF64Vop3p',
+        'VPkLshlAddU64Vop3p',
+        'VWmmaF6416x16x4F64Vop3p',
+    )
+    header = (gfx1250_generated_root / 'vop3p.h').read_text()
+    model = (gfx1250_generated_root / 'vop3p.cpp').read_text()
+    backend_header = (gfx1250_generated_root / 'execution_backend.h').read_text()
+    backend_source = (gfx1250_generated_root / 'execution_backend_exec.cpp').read_text()
+    execution_source = (gfx1250_generated_root / 'vop3p_exec.cpp').read_text()
+
+    for class_name in model_only_classes:
+        class_body = header.split(f'class {class_name} ', 1)[1].split('\n};', 1)[0]
+        assert 'execute_impl' not in class_body
+        constructor = model.split(f'{class_name}::{class_name}(', 1)[1].split('\n}', 1)[
+            0
+        ]
+        assert 'nullptr' in constructor
+        assert class_name not in backend_header
+        assert class_name not in backend_source
+        assert class_name not in execution_source
+
+
 def test_generated_vop_execution_has_no_instruction_storage_bypass(
     amdgpu_generated_root: Path,
 ):
