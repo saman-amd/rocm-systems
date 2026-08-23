@@ -72,6 +72,40 @@ def get_amdgpu_version(
     return None
 
 
+def has_gpu_perf_counter_access() -> bool:
+    """Return True when the current process can use GPU hardware performance counters.
+
+    GPU performance counter collection requires write access to DRM render nodes
+    (``/dev/dri/renderD*``), which is typically granted via the ``render`` group.
+    Without this access the counter-collection ioctl returns EPERM and all
+    collected counter values read as zero, producing silent test failures.
+
+    The check tries two methods in order:
+    1. Supplementary-group membership in the ``render`` group via
+       ``os.getgroups()``.
+    2. Directly opening a render node with write access as a fallback for
+       ACL-based or capability-based grants.
+    """
+    import glob
+    import grp
+
+    try:
+        render_gid = grp.getgrnam("render").gr_gid
+        if render_gid in os.getgroups():
+            return True
+    except KeyError:
+        pass  # No render group on this system — fall through to device check.
+
+    for node in sorted(glob.glob("/dev/dri/renderD*")):
+        try:
+            with open(node, "r+b"):
+                return True
+        except OSError:
+            continue
+
+    return False
+
+
 @dataclass
 class SystemCapabilities:
     """
@@ -616,6 +650,16 @@ class SystemCapabilities:
         """Get (major, minor, patch) of the amdgpu driver, or None if not available."""
         return get_amdgpu_version(self.rocm_path)
 
+
+
+    @persistent_cached_property
+    def gpu_perf_counter_access(self) -> bool:
+        """Return True when this process can use GPU hardware performance counters.
+
+        Delegates to the module-level :func:`has_gpu_perf_counter_access` so
+        the result is cached once per :class:`SystemCapabilities` instance.
+        """
+        return has_gpu_perf_counter_access()
 
 _ROCPROFILER_SDK_VERSION_H_RE = re.compile(
     r'^#define\s+ROCPROFILER_SDK_VERSION_STRING\s+"(\d+)\.(\d+)\.(\d+)"',

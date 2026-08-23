@@ -33,6 +33,7 @@ pytestmark = [
 from rocprofsys import (
     GPUInfo,
 )
+from rocprofsys.capabilities import has_gpu_perf_counter_access
 
 # =============================================================================
 # Transpose fixtures
@@ -374,6 +375,14 @@ class TestTransposeGPUPerfCounters(RocprofsysTest):
             pytest.skip(
                 "transpose GPU perf counter test skipped on "
                 f"{', '.join(sorted(unsupported))}"
+            )
+
+        if not has_gpu_perf_counter_access():
+            pytest.skip(
+                "GPU hardware performance counter access requires render group "
+                "membership or write access to /dev/dri/renderD* — "
+                "skipping on this host (add the runner user to the render group "
+                "or grant CAP_PERFMON to enable this test)"
             )
 
         result = self.run_test(
