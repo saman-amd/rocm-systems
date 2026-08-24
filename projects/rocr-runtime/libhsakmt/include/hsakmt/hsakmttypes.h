@@ -791,6 +791,11 @@ typedef struct _HsaQueueResource
     };
 
     volatile HSAint64* ErrorReason;  /** exception bits signal payload */
+
+    /** GPU virtual address of the WDDM HwQueue progress fence backing a native
+     *  SDMA user queue (Windows/DXG only). ROCr reads this to emit a matching
+     *  SDMA FENCE packet into the ring. 0 for every other queue type/platform. */
+    HSAuint64 SdmaProgressFenceVA;
 } HsaQueueResource;
 
 

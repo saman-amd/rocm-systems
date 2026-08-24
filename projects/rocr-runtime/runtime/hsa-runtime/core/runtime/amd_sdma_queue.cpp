@@ -10,6 +10,7 @@
 #include "core/inc/amd_memory_region.h"
 #include "core/inc/exceptions.h"
 #include "core/inc/runtime.h"
+#include "core/inc/sdma_pkt_builders.h"
 #include "core/util/atomic_helpers.h"
 
 #include <atomic>
@@ -64,7 +65,9 @@ SdmaQueue::SdmaQueue(core::Agent* agent, size_t size_bytes, uint64_t flags, int3
       queue_rptr_(nullptr),
       queue_doorbell_(nullptr),
       sdma_engine_id_(sdma_engine_id),
-      active_(false) {
+      active_(false),
+      progress_fence_va_(0),
+      progress_fence_id_(0) {
   memset(&queue_resource_, 0, sizeof(queue_resource_));
 }
 
@@ -166,6 +169,10 @@ hsa_status_t SdmaQueue::Initialize() {
   queue_wptr_ = reinterpret_cast<volatile uint64_t*>(queue_resource_.Queue_write_ptr);
   queue_rptr_ = reinterpret_cast<volatile uint64_t*>(queue_resource_.Queue_read_ptr);
   queue_doorbell_ = reinterpret_cast<volatile uint64_t*>(queue_resource_.Queue_DoorBell);
+  // Native SDMA user queue (Windows/DXG): the thunk hands back the HwQueue
+  // progress-fence GPU VA so RingDoorbell can emit a matching FENCE packet.
+  // 0 for KFD/SWS paths, which leaves fence emission disabled below.
+  progress_fence_va_ = queue_resource_.SdmaProgressFenceVA;
   if (queue_wptr_ == nullptr || queue_rptr_ == nullptr || queue_doorbell_ == nullptr) {
     Inactivate();
     FreeQueueBuffer();
@@ -231,19 +238,43 @@ hsa_status_t SdmaQueue::RingDoorbell(uint64_t write_index) {
     return HSA_STATUS_ERROR_INVALID_QUEUE;
   }
 
+  uint64_t publish_index = write_index;
+
+  // Native SDMA user queue (Windows/DXG): append a progress FENCE (which writes
+  // the next fence id to the HwQueue progress-fence VA) followed by a TRAP so the
+  // OS scheduler observes completion. Skipped when progress_fence_va_ == 0 (the
+  // KFD and legacy SWS-thread paths), keeping behavior byte-identical there.
+  if (progress_fence_va_ != 0 && queue_start_addr_ != nullptr && queue_size_ != 0) {
+    const uint32_t gfx_major = gpu_agent()->supported_isas()[0]->GetMajorVersion();
+    // DXG selects the non-scope SDMA builder (BlitSdmaV4) across gfx10-12, so the
+    // system-scope header fields stay off here to match that packet layout.
+    const bool scope_fields = false;
+    const uint32_t fence_id = static_cast<uint32_t>(++progress_fence_id_);
+
+    // TODO(sdma-bringup): if a packet would straddle queue_size_, pad to the ring
+    // end with SDMA no-ops before writing (ring-wrap handling), and confirm the
+    // gfx12/Navi4+ conditional-fence variant vs. this FENCE+TRAP pair.
+    size_t off = static_cast<size_t>(publish_index % queue_size_);
+    publish_index += BuildSdmaFencePacket(queue_start_addr_ + off, gfx_major, scope_fields,
+                                          reinterpret_cast<void*>(progress_fence_va_), fence_id);
+
+    off = static_cast<size_t>(publish_index % queue_size_);
+    publish_index += BuildSdmaTrapPacket(queue_start_addr_ + off, 0);
+  }
+
   // Publish step of the submission protocol. SDMA queues are externally
   // synchronized: by the time the doorbell is stored the caller must have
   // written complete packets into the ring and handled wrap/space checks.
   //
   // The public write-index operations use queue_wptr_ directly. Ensure the
   // canonical write pointer and packet stores are visible before the doorbell.
-  atomic::Store(queue_wptr_, write_index, std::memory_order_release);
+  atomic::Store(queue_wptr_, publish_index, std::memory_order_release);
   std::atomic_thread_fence(std::memory_order_release);
-  *queue_doorbell_ = write_index;
+  *queue_doorbell_ = publish_index;
 
   if (core::Runtime::runtime_singleton_->thunkLoader()->IsDXG() ||
       core::Runtime::runtime_singleton_->thunkLoader()->IsDTIF()) {
-    HSAKMT_CALL(hsaKmtQueueRingDoorbell(queue_resource_.QueueId, write_index));
+    HSAKMT_CALL(hsaKmtQueueRingDoorbell(queue_resource_.QueueId, publish_index));
   }
 
   return HSA_STATUS_SUCCESS;

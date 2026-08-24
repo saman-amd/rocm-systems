@@ -53,6 +53,7 @@
 #include "core/inc/amd_memory_region.h"
 #include "core/inc/runtime.h"
 #include "core/inc/sdma_registers.h"
+#include "core/inc/sdma_pkt_builders.h"
 #include "core/inc/signal.h"
 #include "core/inc/interrupt_signal.h"
 #include "core/inc/default_signal.h"
@@ -2098,43 +2099,8 @@ void BlitSdma<useGCR, scopeFields>::BuildFenceCommand(char* fence_command_addr, 
                                          uint32_t fence_value) {
   assert(fence_command_addr != NULL);
 
-  // GFX12 or later use a different packet format that is incompatible (fields changed in size and location).
-  if (agent_->supported_isas()[0]->GetMajorVersion() >= 12) {
-    SDMA_PKT_FENCE_GFX12* packet_addr =
-      reinterpret_cast<SDMA_PKT_FENCE_GFX12*>(fence_command_addr);
-
-    memset(packet_addr, 0, sizeof(SDMA_PKT_FENCE_GFX12));
-
-    packet_addr->HEADER_UNION.op = SDMA_OP_FENCE;
-    packet_addr->HEADER_UNION.mtype = 3;
-
-    /* We only use fence on signals and they are in system memory */
-    packet_addr->HEADER_UNION.sys = 1;
-
-    if (scopeFields)
-      packet_addr->HEADER_UNION.scope = SDMA_MEMORY_SCOPE_SYS;
-
-    packet_addr->ADDR_LO_UNION.addr_31_0 = ptrlow32(fence);
-    packet_addr->ADDR_HI_UNION.addr_63_32 = ptrhigh32(fence);
-
-    packet_addr->DATA_UNION.data = fence_value;
-  } else {
-    SDMA_PKT_FENCE* packet_addr =
-      reinterpret_cast<SDMA_PKT_FENCE*>(fence_command_addr);
-
-    memset(packet_addr, 0, sizeof(SDMA_PKT_FENCE));
-
-    packet_addr->HEADER_UNION.op = SDMA_OP_FENCE;
-
-    if (agent_->supported_isas()[0]->GetMajorVersion() >= 10) {
-      packet_addr->HEADER_UNION.mtype = 3;
-    }
-
-    packet_addr->ADDR_LO_UNION.addr_31_0 = ptrlow32(fence);
-    packet_addr->ADDR_HI_UNION.addr_63_32 = ptrhigh32(fence);
-
-    packet_addr->DATA_UNION.data = fence_value;\
-  }
+  BuildSdmaFencePacket(fence_command_addr, agent_->supported_isas()[0]->GetMajorVersion(),
+                       scopeFields, fence, fence_value);
 }
 
 template <bool useGCR, bool scopeFields>
@@ -2689,25 +2655,7 @@ void BlitSdma<useGCR, scopeFields>::BuildPoll64bCommand(char* cmd_addr, void* ad
 template <bool useGCR, bool scopeFields>
 void BlitSdma<useGCR, scopeFields>::BuildFence64bCommand(char* cmd_addr, void* fence_addr,
                                                          uint64_t fence_value) {
-  SDMA_PKT_FENCE_64B_GFX1250* pkt =
-      reinterpret_cast<SDMA_PKT_FENCE_64B_GFX1250*>(cmd_addr);
-
-  memset(pkt, 0, sizeof(SDMA_PKT_FENCE_64B_GFX1250));
-
-  pkt->HEADER_UNION.op = SDMA_OP_FENCE;
-  pkt->HEADER_UNION.sub_op = SDMA_SUBOP_FENCE_64B;
-  pkt->HEADER_UNION.mtype = 3;
-  // Signal memory is in system memory.
-  pkt->HEADER_UNION.sys = 1;
-
-  if (scopeFields)
-    pkt->HEADER_UNION.scope = SDMA_MEMORY_SCOPE_SYS;
-
-  pkt->ADDR_LO_UNION.addr_31_3 = ptrlow32(fence_addr) >> 3;
-  pkt->ADDR_HI_UNION.addr_63_32 = ptrhigh32(fence_addr);
-
-  pkt->DATA_LO_UNION.data_31_0 = static_cast<uint32_t>(fence_value);
-  pkt->DATA_HI_UNION.data_63_32 = static_cast<uint32_t>(fence_value >> 32);
+  BuildSdmaFence64bPacket(cmd_addr, scopeFields, fence_addr, fence_value);
 }
 
 template <bool useGCR, bool scopeFields>
@@ -2974,13 +2922,7 @@ void BlitSdma<useGCR, scopeFields>::BuildGetGlobalTimestampCommand(char* cmd_add
 }
 
 template <bool useGCR, bool scopeFields> void BlitSdma<useGCR, scopeFields>::BuildTrapCommand(char* cmd_addr, uint32_t event_id) {
-  SDMA_PKT_TRAP* packet_addr =
-      reinterpret_cast<SDMA_PKT_TRAP*>(cmd_addr);
-
-  memset(packet_addr, 0, sizeof(SDMA_PKT_TRAP));
-
-  packet_addr->HEADER_UNION.op = SDMA_OP_TRAP;
-  packet_addr->INT_CONTEXT_UNION.int_ctx = event_id;
+  BuildSdmaTrapPacket(cmd_addr, event_id);
 }
 
 template <bool useGCR, bool scopeFields> void BlitSdma<useGCR, scopeFields>::BuildHdpFlushCommand(char* cmd_addr) {

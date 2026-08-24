@@ -1147,23 +1147,37 @@ SDMAQueue::SDMAQueue(WDDMDevice* device, void* ring, uint64_t cmdbuf_size, uint3
       thread_stop_(false),
       ib_size(0),
       ib_start_addr(0) {
+  // Native SDMA user queue: submit through the WDDM HwQueue path instead of the
+  // SWS translation thread when HWS is enabled and the KMD advertises support.
+  native_sdma_ = use_hws && device->IsSdmaSupported();
   bool ret = device->CreateQueue(this);
   assert(ret);
 
-  thread_ = std::thread(SdmaThread, this);
+  if (!native_sdma_)
+    thread_ = std::thread(SdmaThread, this);
 }
 
 SDMAQueue::~SDMAQueue() {
-  thread_cond_lock_.lock();
-  thread_stop_ = true;
-  thread_cond_lock_.unlock();
-  thread_cond_.notify_one();
-  thread_.join();
+  if (!native_sdma_) {
+    thread_cond_lock_.lock();
+    thread_stop_ = true;
+    thread_cond_lock_.unlock();
+    thread_cond_.notify_one();
+    thread_.join();
+  }
 
   device->DestroyQueue(this);
 }
 
 void SDMAQueue::RingDoorbell(uint64_t value) {
+  if (native_sdma_) {
+    // ROCr already wrote the packets (including the progress FENCE/TRAP) into the
+    // ring and advanced its wptr; `value` is that wptr as a ring byte offset.
+    if (!device->SubmitToSdmaHwQueue(this, value))
+      assert(!"SDMA doorbell failed!");
+    return;
+  }
+
   pr_debug("ringdoorbell %#" PRIx64 " %#" PRIx64 "\n", wptr_pre_, wptr_next_);
   thread_cond_lock_.lock();
 
@@ -1175,6 +1189,11 @@ void SDMAQueue::RingDoorbell(uint64_t value) {
 }
 
 hsa_status_t SDMAQueue::Init(void) {
+  if (native_sdma_)
+    pr_rocr_info("SDMA queue: native user queue (WDDM HwQueue submit)\n");
+  else
+    pr_rocr_info("SDMA queue: legacy SWS translation thread\n");
+
   hsa_status_t ret = use_hws ? HwsInit() : SwsInit();
   if (ret) return ret;
 

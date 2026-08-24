@@ -70,9 +70,10 @@ WDDMDevice::WDDMDevice(D3DKMT_HANDLE adapter, LUID adapter_luid, uint32_t node_i
   NTSTATUS ret = ParseDeviceInfo();
   pr_rocr_info("kmd_version:%" PRIu32 "\n", device_info_.kmd_version);
   device_info_.hwsInfo.hwsMask.aql_queue &= !dxg_runtime->use_pm4_;
-  pr_rocr_info("hwsInfo: aql_queue=%d computeHwsEnabled=%d use_pm4_override=%" PRIu64 "\n",
+  pr_rocr_info("hwsInfo: aql_queue=%d computeHwsEnabled=%d sdma_queue=%d use_pm4_override=%" PRIu64 "\n",
            device_info_.hwsInfo.hwsMask.aql_queue,
            device_info_.hwsInfo.hwsMask.computeHwsEnabled,
+           device_info_.hwsInfo.hwsMask.sdma_queue,
            (uint64_t)dxg_runtime->use_pm4_);
 
   if (ret == STATUS_OBJECT_NAME_NOT_FOUND || ret == STATUS_REVISION_MISMATCH) {
@@ -483,7 +484,8 @@ bool WDDMDevice::Unlock(D3DKMT_HANDLE handle) {
   return false;
 }
 
-bool WDDMDevice::CreateContext(int engine, D3DKMT_HANDLE* handle, uint64_t debugger_data) {
+bool WDDMDevice::CreateContext(int engine, D3DKMT_HANDLE* handle, uint64_t debugger_data,
+                               bool rocr_client) {
   void *priv_data;
   int priv_size;
 
@@ -496,7 +498,7 @@ bool WDDMDevice::CreateContext(int engine, D3DKMT_HANDLE* handle, uint64_t debug
   assert(priv_data);
   memset(priv_data, 0, priv_size);
   Wkmi::FillinContextPrivData(priv_data, SupportStateShadowingByCpFw(),
-                              device_info_.compute_schedid, debugger_data);
+                              device_info_.compute_schedid, debugger_data, rocr_client);
 
   D3DKMT_CREATECONTEXTVIRTUAL args = {0};
   args.hDevice = device_;
@@ -801,7 +803,11 @@ void WDDMDevice::GetClockCounters(uint64_t *gpu, uint64_t *cpu) {
 }
 
 bool WDDMDevice::CreateQueue(WDDMQueue* queue, uint64_t debugger_data) {
-  if (!CreateContext(queue->queue_engine, &queue->context, debugger_data)) return false;
+  // A native SDMA user queue tags its context with the ROCr client id; the KMD
+  // uses that tag (rather than a dedicated flag) to recognize the SDMA ring.
+  bool rocr_client = queue->IsNativeSdma();
+  if (!CreateContext(queue->queue_engine, &queue->context, debugger_data, rocr_client))
+    return false;
 
   GpuMemory *gpu_mem = nullptr;
   if (queue->cmdbuf_addr == 0) {
@@ -889,13 +895,20 @@ bool WDDMDevice::CreateHwQueue(WDDMQueue *queue) {
   // be down-cast to ComputeQueue here -- doing so reads garbage and crashes.
   ComputeQueue* compute_queue = dynamic_cast<ComputeQueue*>(queue);
   D3DKMT_HANDLE resource = 0;
-  bool is_aql = false;
+  Wkmi::HwQueueKind kind = Wkmi::kHwQueuePm4;
   if (compute_queue != nullptr && IsAqlSupported()) {
     auto queue_memory = compute_queue->GetAmdQueueMemory();
     resource = queue_memory->KmtHandle();
-    is_aql = true;
+    kind = Wkmi::kHwQueueAql;
   }
-  Wkmi::FillinHwQueuePrivData(priv_data, FwManagedGfxState, queue->prio, is_aql,
+  // Native SDMA user queue: the ROCr-owned ring (cmdbuf_addr/cmdbuf_size) is the
+  // SDMA queue itself, so no AQL amd_queue_t handle is set; only the doorbell
+  // offset and progress-fence VA are returned by the KMD. IsNativeSdma() already
+  // encodes (use_hws && IsSdmaSupported()), so no capability re-check is needed.
+  if (queue->IsNativeSdma()) {
+    kind = Wkmi::kHwQueueSdma;
+  }
+  Wkmi::FillinHwQueuePrivData(priv_data, FwManagedGfxState, queue->prio, kind,
       queue->cmdbuf_addr, queue->cmdbuf_size, reinterpret_cast<uintptr_t>(queue->ring_wptr),
       reinterpret_cast<uintptr_t>(queue->ring_rptr), resource, &doorbell_loc);
 
@@ -920,6 +933,9 @@ bool WDDMDevice::CreateHwQueue(WDDMQueue *queue) {
   queue->queue = createHwQueue.hHwQueue;
   queue->syncobj = createHwQueue.hHwQueueProgressFence;
   queue->sync_addr = (uint64_t *)createHwQueue.HwQueueProgressFenceCPUVirtualAddress;
+  if (kind == Wkmi::kHwQueueSdma) {
+    queue->hwqueue_progress_fence_va_ = createHwQueue.HwQueueProgressFenceGPUVirtualAddress;
+  }
 
   return true;
 }
@@ -1014,6 +1030,42 @@ bool WDDMDevice::SubmitToAqlQueue(WDDMQueue* queue, uint64_t command_addr, uint6
   }
 #endif
   return true;
+}
+
+// ================================================================================================
+bool WDDMDevice::SubmitToSdmaHwQueue(WDDMQueue* queue, uint64_t wptr_in_bytes) {
+#if defined(WIN32)
+  int priv_size = Wkmi::GetSdmaSubmitPrivDataSize();
+  void* priv_data = alloca(priv_size);
+  memset(priv_data, 0, priv_size);
+  Wkmi::FillinSdmaSubmitPrivData(priv_data, wptr_in_bytes);
+
+  // The SDMA ring already carries a FENCE packet that writes this same id to the
+  // progress-fence VA; the two must agree for the OS fence to advance.
+  // TODO(sdma-bringup): reconcile fence-id ownership with ROCr's FENCE packet
+  // (hsaKmtQueueRingDoorbell carries no fence id today).
+  uint64_t fence_id = ++queue->hwqueue_fence_id_;
+
+  // Native SDMA carries no IB: the wptr byte offset in the private data tells the
+  // KMD how far the ring has advanced, so CommandBuffer/Length stay zero.
+  D3DKMT_SUBMITCOMMANDTOHWQUEUE args = {
+      .hHwQueue = queue->queue,
+      .HwQueueProgressFenceId = fence_id,
+      .CommandBuffer = 0,
+      .CommandLength = 0,
+      .PrivateDriverDataSize = static_cast<UINT>(priv_size),
+      .pPrivateDriverData = priv_data};
+  NTSTATUS ret = DXCORE_CALL(D3DKMTSubmitCommandToHwQueue(&args));
+  if (ret != STATUS_SUCCESS) {
+    pr_err("fail %x\n", ret);
+    return false;
+  }
+  return true;
+#else
+  (void)queue;
+  (void)wptr_in_bytes;
+  return false;
+#endif
 }
 
 // ================================================================================================

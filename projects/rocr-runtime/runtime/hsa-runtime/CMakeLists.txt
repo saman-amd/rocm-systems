@@ -231,6 +231,7 @@ set ( SRCS core/driver/driver.cpp
            core/runtime/amd_hsa_loader.cpp
            core/runtime/amd_aql_queue.cpp
            core/runtime/amd_sdma_queue.cpp
+           core/runtime/sdma_pkt_builders.cpp
            core/runtime/amd_loader_context.cpp
            core/runtime/hsa_ven_amd_loader.cpp
            core/runtime/amd_memory_region.cpp
