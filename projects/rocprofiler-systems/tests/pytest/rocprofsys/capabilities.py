@@ -650,8 +650,6 @@ class SystemCapabilities:
         """Get (major, minor, patch) of the amdgpu driver, or None if not available."""
         return get_amdgpu_version(self.rocm_path)
 
-
-
     @persistent_cached_property
     def gpu_perf_counter_access(self) -> bool:
         """Return True when this process can use GPU hardware performance counters.
@@ -660,6 +658,7 @@ class SystemCapabilities:
         the result is cached once per :class:`SystemCapabilities` instance.
         """
         return has_gpu_perf_counter_access()
+
 
 _ROCPROFILER_SDK_VERSION_H_RE = re.compile(
     r'^#define\s+ROCPROFILER_SDK_VERSION_STRING\s+"(\d+)\.(\d+)\.(\d+)"',
