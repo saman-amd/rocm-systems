@@ -110,6 +110,14 @@ nodes:
         label: "HBM write"
         guidance_id: gl2_mem_bw_write
 
+      gl2_mem_bw_other:
+        requires_parent: true
+        requires_siblings_false:
+          - gl2_mem_bw_read
+          - gl2_mem_bw_write
+        label: "HBM balanced"
+        guidance_id: gl2_mem_bw_other
+
   gl2_internal_resource:
     level: GL2
     metric: "L2 Internal Resource Pressure - Latency FIFO"
@@ -167,6 +175,14 @@ nodes:
         threshold: stall_pct_high
         label: "EA HBM write"
         guidance_id: ea_hbm_write
+
+      ea_hbm_other:
+        requires_parent: true
+        requires_siblings_false:
+          - ea_hbm_read
+          - ea_hbm_write
+        label: "EA HBM balanced"
+        guidance_id: ea_hbm_other
 
   ea_gmi_bw_bound:
     level: EA

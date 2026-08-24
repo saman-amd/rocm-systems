@@ -17,7 +17,7 @@ class TestLoadTreeSpec:
         """Load the real gfx950 spec -- verifies YAML parses and validates."""
         spec = load_tree_spec("gfx950")
         assert len(spec.thresholds) == 2
-        assert len(spec.guidance_templates) == 19
+        assert len(spec.guidance_templates) == 21
         assert len(spec.schema_hash) == 16
 
     def test_missing_arch_raises(self):

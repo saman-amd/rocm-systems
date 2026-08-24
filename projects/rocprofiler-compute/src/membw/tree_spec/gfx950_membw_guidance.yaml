@@ -43,7 +43,7 @@ guidance_templates:
       Measured  : {metric:L1 Cache - VMEM stalled by L1 Cache}% (threshold: {threshold:stall_pct_high}%)
       Impact    : SQ command FIFO full -- L1 cache stall backpressured to shader core
 
-  # --- GL2 templates (7) ---
+  # --- GL2 templates (8) ---
 
   gl2_back_pressure: |
     [GL2] L2 back pressure
@@ -62,6 +62,12 @@ guidance_templates:
       Condition : HBM write credit stall >= {threshold:stall_pct_high}%
       Measured  : {metric:L2 Memory BW Bound - Write Credit Pressure}% (threshold: {threshold:stall_pct_high}%)
       Impact    : L2 stalled waiting for HBM write credits -- memory write bandwidth saturated
+
+  gl2_mem_bw_other: |
+    [GL2] HBM bandwidth bound (balanced read/write)
+      Condition : Combined HBM credit stall >= {threshold:stall_pct_high}% with neither read nor write individually dominant
+      Measured  : {metric:L2 Memory BW Bound - Combined Credit Pressure}% (threshold: {threshold:stall_pct_high}%)
+      Impact    : L2 stalled on HBM bandwidth from balanced read/write pressure -- neither path individually exceeds the threshold
 
   gl2_latency_fifo: |
     [GL2] L2 internal resource pressure -- Latency FIFO
@@ -87,7 +93,7 @@ guidance_templates:
       Measured  : {metric:L2 Remote Access Pressure (GMI)}% (threshold: {threshold:stall_pct_high}%)
       Impact    : Remote memory access bottleneck -- multi-GPU or multi-socket traffic saturated
 
-  # --- EA templates (6) ---
+  # --- EA templates (7) ---
 
   ea_hbm_read: |
     [EA] HBM read bandwidth bound
@@ -100,6 +106,12 @@ guidance_templates:
       Condition : HBM write credit stall >= {threshold:stall_pct_high}%
       Measured  : {metric:EA HBM BW Bound - Write Credit Pressure}% (threshold: {threshold:stall_pct_high}%)
       Impact    : EA write path saturated by HBM bandwidth
+
+  ea_hbm_other: |
+    [EA] HBM bandwidth bound (balanced read/write)
+      Condition : Combined EA HBM stall >= {threshold:stall_pct_high}% with neither read nor write individually dominant
+      Measured  : {metric:EA HBM BW Bound - Combined}% (threshold: {threshold:stall_pct_high}%)
+      Impact    : EA stalled on HBM bandwidth from balanced read/write pressure -- neither path individually exceeds the threshold
 
   ea_gmi: |
     [EA] GMI bandwidth bound

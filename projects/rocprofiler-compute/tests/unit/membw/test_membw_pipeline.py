@@ -108,13 +108,48 @@ class TestFullPipeline:
         assert states["gl1_vmem_stall"] == "inactive"
         assert states["gl2_mem_bw_bound"] == "active"
         assert states["gl2_mem_bw_read"] == "active"
+        assert states["gl2_mem_bw_other"] == "inactive"
         assert states["ea_hbm_bw_bound"] == "active"
         assert states["ea_hbm_read"] == "active"
+        assert states["ea_hbm_other"] == "inactive"
 
         assert len(result.guidance_blocks) > 0
         guidance_text = "\n".join(result.guidance_blocks)
         assert "UTCL1" in guidance_text
         assert "HBM" in guidance_text
+
+    def test_balanced_pressure_triggers_catch_all(self, gfx950_spec):
+        """Balanced read/write pressure fires catch-all children."""
+        balanced = dict(UTCL1_HBM_WORKLOAD)
+        balanced["L2 Memory BW Bound - Combined Credit Pressure"] = 12.0
+        balanced["L2 Memory BW Bound - Read Credit Pressure"] = 6.0
+        balanced["L2 Memory BW Bound - Write Credit Pressure"] = 6.0
+        balanced["EA HBM BW Bound - Combined"] = 14.0
+        balanced["EA HBM BW Bound - Read Credit Pressure"] = 7.0
+        balanced["EA HBM BW Bound - Write Credit Pressure"] = 7.0
+
+        metric_keys = collect_metric_keys(gfx950_spec)
+        dfs = build_mock_dfs(balanced)
+        extracted = extract_metric_values(dfs, metric_keys)
+        units = extract_metric_units(dfs)
+
+        result = evaluate_membw_tree(
+            gfx950_spec, extracted, "gfx950", "full", None, metric_units=units
+        )
+        states = collect_node_states(result.nodes)
+
+        assert states["gl2_mem_bw_bound"] == "active"
+        assert states["gl2_mem_bw_read"] == "inactive"
+        assert states["gl2_mem_bw_write"] == "inactive"
+        assert states["gl2_mem_bw_other"] == "active"
+
+        assert states["ea_hbm_bw_bound"] == "active"
+        assert states["ea_hbm_read"] == "inactive"
+        assert states["ea_hbm_write"] == "inactive"
+        assert states["ea_hbm_other"] == "active"
+
+        guidance_text = "\n".join(result.guidance_blocks)
+        assert "balanced" in guidance_text.lower()
 
     def test_all_below_threshold(self, gfx950_spec):
         """No bottlenecks when all metrics are well below thresholds."""
