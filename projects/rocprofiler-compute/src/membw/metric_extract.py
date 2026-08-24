@@ -64,7 +64,7 @@ def extract_membw_metrics(
                 all_units[name] = str(unit)
 
     values = {key: all_values.get(key) for key in metric_keys}
-    present = metric_keys & frozenset(all_values)
+    present = metric_keys & frozenset(k for k, v in all_values.items() if v is not None)
     if present == metric_keys:
         availability = "full"
         availability_reason = None

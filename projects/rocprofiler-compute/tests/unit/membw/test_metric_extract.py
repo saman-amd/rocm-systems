@@ -63,3 +63,10 @@ class TestExtractMembwMetrics:
 
         result = extract_membw_metrics({}, frozenset({"m1"}))
         assert result.availability == "unavailable"
+
+    def test_nan_value_not_counted_as_present(self):
+        df = make_table_df([("m1", float("nan")), ("m2", 10.0)])
+        dfs = {3001: df}
+        result = extract_membw_metrics(dfs, frozenset({"m1", "m2"}))
+        assert result.availability == "partial"
+        assert "m1" in result.availability_reason
