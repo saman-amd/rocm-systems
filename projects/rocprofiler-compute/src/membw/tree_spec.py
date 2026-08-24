@@ -162,7 +162,7 @@ def _validate_node(
     sibling_ids: set[str],
 ) -> None:
     """Validate a single node and recurse into children."""
-    if node.level and node.level not in _VALID_LEVELS:
+    if node.level not in _VALID_LEVELS:
         errors.append(f"Node {node.id!r}: invalid level {node.level!r}")
 
     if node.is_catch_all:
