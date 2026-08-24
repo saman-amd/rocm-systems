@@ -62,3 +62,10 @@ class TestCheckMetricAvailability:
 
         avail, _ = check_metric_availability({}, frozenset({"m1"}))
         assert avail == "unavailable"
+
+    def test_nan_value_not_counted_as_present(self):
+        df = make_table_df([("m1", float("nan")), ("m2", 10.0)])
+        dfs = {3001: df}
+        avail, reason = check_metric_availability(dfs, frozenset({"m1", "m2"}))
+        assert avail == "partial"
+        assert "m1" in reason

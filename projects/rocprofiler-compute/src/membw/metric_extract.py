@@ -54,7 +54,8 @@ def check_metric_availability(
         return ("unavailable", "no panel 3000 data")
 
     lookup = _build_metric_lookup(dfs)
-    present = metric_keys & frozenset(lookup)
+    evaluated = frozenset(k for k, v in lookup.items() if v is not None)
+    present = metric_keys & evaluated
     if present == metric_keys:
         return ("full", None)
     missing = sorted(metric_keys - present)
