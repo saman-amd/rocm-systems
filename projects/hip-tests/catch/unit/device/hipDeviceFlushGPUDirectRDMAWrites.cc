@@ -484,47 +484,56 @@ HIP_TEST_CASE(Unit_hipDeviceFlushGPUDirectRDMAWrites_Negative_Parameters) {
   SECTION("scope is zero") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(goodTarget, static_cast<Scope>(0)),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("scope is one") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(goodTarget, static_cast<Scope>(1)),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("scope is just below ToOwner") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(goodTarget, static_cast<Scope>(99)),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("scope is negative") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(goodTarget, static_cast<Scope>(-1)),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("scope is far out of range") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(goodTarget, static_cast<Scope>(0x7fff)),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("target is one past the only valid enumerator") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(static_cast<Target>(1), goodScope),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("target is negative") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(static_cast<Target>(-1), goodScope),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("target is far out of range") {
     HIP_CHECK_ERROR(hipDeviceFlushGPUDirectRDMAWrites(static_cast<Target>(0x7fff), goodScope),
                     hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 
   SECTION("target and scope are out of range") {
     HIP_CHECK_ERROR(
         hipDeviceFlushGPUDirectRDMAWrites(static_cast<Target>(0x7fff), static_cast<Scope>(0x7fff)),
         hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 }
 
@@ -547,7 +556,9 @@ HIP_TEST_CASE(Unit_hipDeviceFlushGPUDirectRDMAWrites_Negative_Parameters) {
  *  - HIP_VERSION >= 7.2
  */
 HIP_TEST_CASE(Unit_hipDeviceFlushGPUDirectRDMAWrites_Negative_FailureSetsLastErrorOnly) {
-  HIP_CHECK(hipGetLastError());  // clear anything inherited
+  // Discard, not HIP_CHECK: a sibling test may have left a sticky error and this case must
+  // start from a known-clean state rather than assert on what it inherited.
+  (void)hipGetLastError();
 
   HIP_CHECK_ERROR(
       hipDeviceFlushGPUDirectRDMAWrites(static_cast<hipFlushGPUDirectRDMAWritesTarget>(0x7fff),
@@ -593,7 +604,9 @@ HIP_TEST_CASE(Unit_hipDeviceFlushGPUDirectRDMAWrites_Positive_AfterDeviceReset) 
                       hipFlushGPUDirectRDMAWritesTargetCurrentDevice,
                       hipFlushGPUDirectRDMAWritesToOwner),
                   expected);
-  HIP_CHECK(hipGetLastError());
+  // Discard rather than assert: on a device with no flush path `expected` is an error and
+  // would legitimately be sticky here.
+  (void)hipGetLastError();
 
   // The recreated context must be usable.
   int* buffer = nullptr;
@@ -681,6 +694,7 @@ HIP_TEST_CASE(Unit_hipDeviceFlushGPUDirectRDMAWrites_Negative_AttributeQuery) {
     HIP_CHECK_ERROR(hipDeviceGetAttribute(&value, attribute, -1), hipErrorInvalidDevice);
     HIP_CHECK_ERROR(hipDeviceGetAttribute(&value, attribute, numDevices), hipErrorInvalidDevice);
     HIP_CHECK_ERROR(hipDeviceGetAttribute(nullptr, attribute, 0), hipErrorInvalidValue);
+    (void)hipGetLastError();
   }
 }
 
