@@ -531,6 +531,51 @@ TEST_P(FallbackAsyncIO, attemptToQueueCleanupOnStreamSubmissionFailure)
     std::this_thread::sleep_for(500ms);
 }
 
+TEST_P(FallbackAsyncIO, multipleChunksAreQueued)
+{
+    size               = 1_MiB;
+    size_t chunk_size  = 256_KiB;
+    int    chunk_count = 4;
+    EXPECT_CALL(*mbuffer, getLength).WillOnce(Return(size));
+    EXPECT_CALL(*mbuffer, getGpuId).Times(AnyNumber()).WillRepeatedly(Return(0));
+    EXPECT_CALL(*mbuffer, getBuffer).WillOnce(Return(reinterpret_cast<hipStream_t>(0xBADBADBB)));
+    EXPECT_CALL(*mstream, getHipDevice).WillOnce(Return(0));
+    // All params fixed so no bind_params host function is enqueued.
+    EXPECT_CALL(*mstream, fixedIOSize).Times(AnyNumber()).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mstream, fixedFileOffset).Times(AnyNumber()).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mstream, fixedBufferOffset).Times(AnyNumber()).WillRepeatedly(Return(true));
+
+    auto op_data = malloc(sizeof(AsyncOpFallback));
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
+    ASSERT_NE(op_data, nullptr);
+    auto bounce_buffer = malloc(chunk_size);
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
+    ASSERT_NE(bounce_buffer, nullptr);
+    EXPECT_CALL(mconfig, asyncBufferSize).WillOnce(Return(chunk_size));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data)).WillOnce(Return(bounce_buffer));
+    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer), _))
+        .WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
+    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(op_data), _))
+        .WillOnce(Return(reinterpret_cast<void *>(0xDE000000)));
+    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer))).WillOnce([](void *ptr) { free(ptr); });
+    EXPECT_CALL(mhip, hipHostFree(Eq(op_data))).WillOnce([](void *ptr) { free(ptr); });
+    EXPECT_CALL(mhip, hipDeviceGetAttribute).WillOnce(Return(1024));
+    EXPECT_CALL(*mstream, getLock);
+    EXPECT_CALL(*mstream, getHipStream).Times(AnyNumber());
+    // Each chunk enqueues a cpu copy, a memcpy kernel, and an advance; cleanup runs once at the end.
+    EXPECT_CALL(mhip, hipLaunchHostFunc(_, Eq(&async_io_cpu_copy), _)).Times(chunk_count);
+    EXPECT_CALL(mhip, hipLaunchKernel).Times(chunk_count);
+    EXPECT_CALL(mhip, hipLaunchHostFunc(_, Eq(&async_io_advance), _)).Times(chunk_count);
+    EXPECT_CALL(mhip, hipLaunchHostFunc(_, Eq(&async_io_cleanup), _));
+
+    Fallback().async_io(io_type, mfile, mbuffer, &size, &file_offset, &buffer_offset, &bytes_written,
+                        mstream);
+    // The enqueued host functions are mocked and never run; free the op manually.
+    async_io_cleanup(op_data);
+    // Sleep to allow cleanup thread to destruct op
+    std::this_thread::sleep_for(500ms);
+}
+
 INSTANTIATE_TEST_SUITE_P(FallbackAsyncIOSuite, FallbackAsyncIO,
                          ::testing::Values(IoType::Read, IoType::Write));
 
@@ -725,6 +770,71 @@ TEST_P(AsyncIoOpWithParams, cpuCopyReadPreadPwriteRetriesOnEINTR)
 INSTANTIATE_TEST_SUITE_P(AsyncIoOpWithParamsSuite, AsyncIoOpWithParams,
                          ::testing::Values(AsyncIoOpBindParams{IoType::Read, true, true, true},
                                            AsyncIoOpBindParams{IoType::Write, true, true, true}));
+
+struct AsyncIoCpuCopyChunkParams {
+    IoType io_type;
+    size_t io_size;         // Total size of the op
+    size_t chunk_size;      // op->chunk_size (async buffer size)
+    size_t bytes_completed; // op->bytes_transferred_internal at entry (offset already transferred)
+    size_t expected_chunk;  // Bytes this single cpu_copy call should transfer
+};
+
+struct AsyncIoOpChunked : public AsyncIoOp, public ::testing::WithParamInterface<AsyncIoCpuCopyChunkParams> {
+    void SetUp() override
+    {
+        auto params         = GetParam();
+        io_type             = params.io_type;
+        size                = params.io_size;
+        fixed_buffer_offset = true;
+        fixed_file_offset   = true;
+        fixed_io_size       = true;
+        AsyncIoOp::SetUp();
+        op->chunk_size                 = params.chunk_size;
+        op->bytes_transferred_internal = static_cast<ssize_t>(params.bytes_completed);
+        // The write path consumes the chunk length the kernel publishes before cpu_copy runs.
+        if (io_type == IoType::Write) {
+            op->chunk_bytes_copied = params.expected_chunk;
+        }
+    }
+};
+
+// cpu_copy transfers only the current chunk of a larger IO, at the file offset implied by the bytes
+// already completed, and reports the chunk length back through chunk_bytes_copied.
+TEST_P(AsyncIoOpChunked, cpuCopyTransfersSingleChunkOfLargerIo)
+{
+    auto        params          = GetParam();
+    void       *bounce_host     = op->bounceBufferHostPtr();
+    const off_t expected_offset = file_offset + static_cast<off_t>(params.bytes_completed);
+    EXPECT_CALL(*mfile, bufferedFd).WillOnce(Return(7));
+    if (io_type == IoType::Read) {
+        EXPECT_CALL(msys, pread(Eq(7), Eq(bounce_host), Eq(params.expected_chunk), Eq(expected_offset)))
+            .WillOnce(Return(params.expected_chunk));
+    }
+    else {
+        EXPECT_CALL(msys, pwrite(Eq(7), Eq(bounce_host), Eq(params.expected_chunk), Eq(expected_offset)))
+            .WillOnce(Return(params.expected_chunk));
+    }
+    async_io_cpu_copy(op.get());
+    ASSERT_EQ(op->chunk_bytes_copied, params.expected_chunk);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AsyncIoOpChunkedSuite, AsyncIoOpChunked,
+    ::testing::Values(
+        // Read: first, middle, and clamped-tail chunks of a 1 MiB IO with a 256 KiB buffer
+        AsyncIoCpuCopyChunkParams{IoType::Read, 1_MiB, 256_KiB, 0, 256_KiB},
+        AsyncIoCpuCopyChunkParams{IoType::Read, 1_MiB, 256_KiB, 512_KiB, 256_KiB},
+        AsyncIoCpuCopyChunkParams{IoType::Read, 1_MiB, 256_KiB, 896_KiB, 128_KiB},
+        // Write: middle and clamped-tail chunks; the length comes from chunk_bytes_copied
+        AsyncIoCpuCopyChunkParams{IoType::Write, 1_MiB, 256_KiB, 512_KiB, 256_KiB},
+        AsyncIoCpuCopyChunkParams{IoType::Write, 1_MiB, 256_KiB, 896_KiB, 128_KiB}),
+    [](const testing::TestParamInfo<AsyncIoOpChunked::ParamType> &param_info) {
+        const auto &p    = param_info.param;
+        std::string name = p.io_type == IoType::Read ? "Read" : "Write";
+        name += "_chunk" + std::to_string(p.chunk_size);
+        name += "_at" + std::to_string(p.bytes_completed);
+        return name;
+    });
 
 struct FastpathAsyncIO : public HipFileOpened {
     FastpathAsyncIO()
