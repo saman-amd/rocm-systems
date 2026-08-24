@@ -128,3 +128,15 @@ Disambiguation: violation status (MI300+, time %) ≠ throttle_status (older gen
 
 Retired / reserved VRAM pages — "bad pages" and "retired pages" are the **same set**, same struct `amdsmi_retired_page_record_t` (amdsmi.h:1945-1958), via `amdsmi_get_gpu_bad_page_info()` / `amdsmi_get_gpu_memory_reserved_pages()`. State is the `amdsmi_memory_page_status_t` enum: **PENDING** (flagged, awaiting retirement window) → **RESERVED** (retired, unavailable) or **UNRESERVABLE** (failed). amd-smi reports address/size/status only — the **error class (CE vs UE) driving retirement is not captured or exposed** here; CE/UE counts live separately in `amdsmi_get_gpu_ecc_count()` (see docs/conceptual/ras.md).
 Disambiguation: bad pages ≡ retired pages (one set, status enum distinguishes pending/reserved/unreservable); error class is NOT part of it — use ECC count for CE/UE.
+
+### IFoE
+
+InfiniBand-over-Ethernet — AMD's fabric protocol for GPU-to-GPU communication over Ethernet physical layer. UALoE library provides IFoE network port management and telemetry. CPER records for IFoE link events (down/up/fatal) are retrieved via `amdsmi_get_fabric_cper_entries()` and distinguished by the IFoE notify_type GUID.
+
+### CPER
+
+Common Platform Error Record (UEFI 2.x spec) — standardized binary format for hardware error logs. amdsmi uses CPER for both GPU (from kernel amdgpu driver via sysfs) and fabric (from UALoE library) RAS events. Header is 128 bytes; payload varies. GPU and fabric CPERs are distinguished by the `notify_type` GUID field.
+
+### UALoE handle
+
+`ualoe_handle_t` — opaque token for a UALoE-managed fabric device. Retrieved via `device->get_ualoe_handle()` (impl/amd_smi_gpu_device.h). Passed to `ualoe_*` APIs. Not all GPUs have one (only those with IFoE ports). A handle value of `0` means UALoE not available.
