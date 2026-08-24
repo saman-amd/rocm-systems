@@ -1276,6 +1276,17 @@ bool Vop3::has_lit_0_has_lit_1_has_lit_2() {
   return inst_.src0 == 255 && inst_.src1 == 255 && inst_.src2 == 255;
 }
 
+bool Vop3p::uses_vop3p_absolute_source_syntax() const {
+  switch (inst_.op) {
+  case 32:
+  case 33:
+  case 34:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool Vop3p::has_encoded_literal32() const {
   switch (inst_.op) {
   case 1:
@@ -1327,7 +1338,39 @@ Vop3p::Vop3p(std::string_view mnemonic, const Vop3pMachineInst *inst, ExecuteFn 
   raw_encoding_ = raw_words_.data();
 }
 
+void Vop3p::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  if (!uses_vop3p_absolute_source_syntax() || operand_index >= 3) {
+    Instruction::append_src_operand(out, operand_index);
+    return;
+  }
+  if ((inst_.neg >> operand_index) & 1u)
+    out += '-';
+  const bool absolute = ((inst_.neg_hi >> operand_index) & 1u) != 0;
+  if (absolute)
+    out += '|';
+  const uint32_t selector =
+      operand_index == 0 ? inst_.src0 : (operand_index == 1 ? inst_.src1 : inst_.src2);
+  if (selector == 255) {
+    out += "lit(";
+    out += operand->name();
+    out += ')';
+  } else {
+    out += operand->name();
+  }
+  if (absolute)
+    out += '|';
+}
+
 void Vop3p::build_modifiers(std::string &out) const {
+  auto *inst = &inst_;
+  (void)inst;
+  amdgpu::vop::append_vop3p_disassembly(
+      out, inst->op_sel, inst->op_sel_hi | (inst->op_sel_hi_2 << 2), 0, 0, inst->clamp, 3, false);
+  if (inst_.src0 == amdgpu::SRC_DPP)
+    amdgpu::dpp::append_dpp16_disassembly(out, dpp_ctrl_, dpp_row_mask_, dpp_bank_mask_,
+                                          dpp_bound_ctrl_, dpp_fi_, true,
+                                          amdgpu::dpp::DppCtrlDialect::Gfx10Plus);
   if (amdgpu::dpp::is_src_dpp8(inst_.src0))
     amdgpu::dpp::append_dpp8_disassembly(out, dpp8_lane_sel_, dpp_fi_);
 }
@@ -1398,10 +1441,14 @@ bool Ds::uses_split_ds_offsets() const {
   switch (inst_.op) {
   case 14:
   case 15:
+  case 46:
+  case 47:
   case 55:
   case 56:
   case 78:
   case 79:
+  case 110:
+  case 111:
   case 119:
   case 120:
     return true;
@@ -1489,6 +1536,69 @@ Mimg::Mimg(std::string_view mnemonic, const MimgMachineInst *inst, ExecuteFn exe
   raw_encoding_ = reinterpret_cast<const uint32_t *>(&inst_);
   encoding_id_ = raw_encoding_[0] >> 23;
   opcode_ = inst_.op;
+}
+
+void Mimg::capture_nsa_words(const MachineInst *inst, const Operand *vaddr) {
+  if (!inst_.nsa)
+    return;
+  nsa_vaddr_operand_ = vaddr;
+  const uint32_t vaddr_words = (vaddr->size_bits() + 31) / 32;
+  uint32_t extension_words = vaddr_words > 1 ? (vaddr_words + 2) / 4 : 0;
+  if (extension_words > 3)
+    extension_words = 3;
+  size_ = sizeof(OpEncoding) + extension_words * sizeof(MachineInst);
+  std::memcpy(raw_words_.data(), inst, size_);
+  raw_encoding_ = raw_words_.data();
+}
+
+void Mimg::append_src_operand(std::string &out, uint8_t operand_index) const {
+  const Operand *operand = src_operands_[operand_index];
+  if (!inst_.nsa || operand != nsa_vaddr_operand_) {
+    Instruction::append_src_operand(out, operand_index);
+    return;
+  }
+  const uint32_t vaddr_words = (operand->size_bits() + 31) / 32;
+  out += "[";
+  for (uint32_t index = 0; index < vaddr_words; ++index) {
+    if (index != 0)
+      out += ", ";
+    const uint32_t selector =
+        index == 0 ? inst_.vaddr
+                   : (raw_words_[2 + (index - 1) / 4] >> (((index - 1) % 4) * 8)) & 0xffu;
+    out += "v" + std::to_string(selector);
+  }
+  out += "]";
+}
+
+void Mimg::build_modifiers(std::string &out) const {
+  auto *inst = &inst_;
+  (void)inst;
+  if (inst->dmask != 1 || mnemonic_.starts_with("image_atomic")) {
+    out += " dmask:0x";
+    out += "0123456789abcdef"[inst->dmask & 0xfu];
+  }
+  static constexpr std::string_view dims[] = {"1D",       "2D",       "3D",      "CUBE",
+                                              "1D_ARRAY", "2D_ARRAY", "2D_MSAA", "2D_MSAA_ARRAY"};
+  out += " dim:SQ_RSRC_IMG_";
+  out += dims[inst->dim & 7u];
+  if (inst->unorm)
+    out += " unorm";
+  if (inst->glc)
+    out += " glc";
+  if (inst->slc)
+    out += " slc";
+  if (inst->dlc)
+    out += " dlc";
+  if (inst->r128)
+    out += " r128";
+  if (inst->tfe)
+    out += " tfe";
+  if (inst->lwe)
+    out += " lwe";
+  if (inst->a16)
+    out += " a16";
+  if (inst->d16)
+    out += " d16";
 }
 
 bool Mimg::has_nsa() { return inst_.nsa == 1; }

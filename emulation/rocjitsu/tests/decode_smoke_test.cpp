@@ -463,6 +463,61 @@ TEST(SendmsgReturnDecodeTest, Rdna3Selector255DoesNotConsumeLiteral) {
   EXPECT_EQ(inst->src_operand(0)->name(), "255");
 }
 
+TEST(SendmsgReturnDecodeTest, Rdna35FormatsReturnMessageSelector) {
+  constexpr uint32_t words[] = {
+      0xBE804C00u, // s_sendmsg_rtn_b32 s0, sendmsg(0, 0, 0)
+      0xBE804D80u, // s_sendmsg_rtn_b64 s[0:1], sendmsg(MSG_RTN_GET_DOORBELL)
+  };
+  auto decoder = Decoder::create(ROCJITSU_CODE_ARCH_RDNA3_5);
+  ASSERT_NE(decoder, nullptr);
+
+  std::unique_ptr<Instruction> b32(decode_valid(*decoder, &words[0]));
+  ASSERT_NE(b32, nullptr);
+  EXPECT_EQ(b32->disassemble(), "s_sendmsg_rtn_b32 s0, sendmsg(0, 0, 0)");
+
+  std::unique_ptr<Instruction> b64(decode_valid(*decoder, &words[1]));
+  ASSERT_NE(b64, nullptr);
+  EXPECT_EQ(b64->disassemble(), "s_sendmsg_rtn_b64 s[0:1], sendmsg(MSG_RTN_GET_DOORBELL)");
+}
+
+TEST(Rdna35FuzzDecodeTest, PreservesRoundTripSignificantSyntax) {
+  struct TestCase {
+    std::array<uint32_t, 3> words;
+    int size;
+    const char *disassembly;
+  };
+  constexpr TestCase cases[] = {
+      {{0x7FE0CD74u, 0u, 0u}, 4, "v_swap_b16 v112.h, v116.l"},
+      {{0xCC217FEEu, 0xBBBB00ECu, 0u},
+       8,
+       "v_fma_mixlo_f16 v238, -|src_shared_limit|, |v128|, -|src_private_limit| "
+       "op_sel:[1,1,1] op_sel_hi:[1,1,1]"},
+      {{0xCC200000u, 0x00E1FF00u, 0u}, 12, "v_fma_mix_f32 v0, v0, lit(0x0), s56"},
+      {{0xD9BE8102u, 0x03BFA100u, 0u},
+       8,
+       "ds_storexchg_2addr_stride64_rtn_b64 v[3:6], v0, v[161:162], v[191:192] "
+       "offset0:2 offset1:129 gds"},
+      {{0xF0701200u, 0x00010000u, 0u},
+       8,
+       "image_sample_d v0, v[0:2], s[4:11], s[0:3] dmask:0x2 "
+       "dim:SQ_RSRC_IMG_1D slc"},
+      {{0xF0340100u, 0u, 0u}, 8, "image_atomic_sub v0, v0, s[0:7] dmask:0x1 dim:SQ_RSRC_IMG_1D"},
+      {{0xF1107F01u, 0u, 0u},
+       12,
+       "image_sample_c_d_cl v[0:3], [v0, v0, v0, v0, v0], s[0:7], s[0:3] "
+       "dmask:0xf dim:SQ_RSRC_IMG_1D glc slc dlc"},
+  };
+  auto decoder = Decoder::create(ROCJITSU_CODE_ARCH_RDNA3_5);
+  ASSERT_NE(decoder, nullptr);
+
+  for (const auto &test : cases) {
+    std::unique_ptr<Instruction> inst(decode_valid(*decoder, test.words.data()));
+    ASSERT_NE(inst, nullptr);
+    EXPECT_EQ(inst->size(), test.size) << test.disassembly;
+    EXPECT_EQ(inst->disassemble(), test.disassembly);
+  }
+}
+
 TEST(FieldlessOperandDecodeTest, SaveexecExposesInertExecAndSccOperands) {
   const uint32_t words[] = {
       0xBE802000u, // s_and_saveexec_b64 s[0:1], s[0:1]

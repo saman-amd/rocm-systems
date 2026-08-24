@@ -5630,7 +5630,7 @@ DecodeResult decodeVSwapB32Vop1(const MachineInst *opcode, const DecodeErrorEmit
 VSwapB16Vop1::VSwapB16Vop1(const MachineInst *inst)
     : Vop1(amdgpu::dpp::is_src_dpp8(reinterpret_cast<const OpEncoding *>(inst)->src0)
                ? "v_swap_b16_dpp"
-               : "v_swap_b16_e32",
+               : "v_swap_b16",
            reinterpret_cast<const OpEncoding *>(inst),
            selected_exec_fn(InstructionExecutionId::VSwapB16Vop1)),
       vdst(16, OperandType::OPR_VGPR,
@@ -5643,6 +5643,9 @@ VSwapB16Vop1::VSwapB16Vop1(const MachineInst *inst)
   src_operands_[1] = &src0;
   num_src_ = 2;
   num_dst_ = 2;
+  src0 = Operand(
+      16, OperandType::OPR_VGPR,
+      static_cast<unsigned short>(reinterpret_cast<const OpEncoding *>(inst)->src0 & 0x7fu), true);
   vdst.set_vgpr_msb_role(amdgpu::VgprMsbRole::Dst);
   src0.set_vgpr_msb_role(amdgpu::VgprMsbRole::Src0);
 }
@@ -5653,7 +5656,7 @@ DecodeResult decodeVSwapB16Vop1(const MachineInst *opcode, const DecodeErrorEmit
   Result validation = Vop1::validate_encoding(
       amdgpu::dpp::is_src_dpp8(reinterpret_cast<const Vop1::OpEncoding *>(inst)->src0)
           ? "v_swap_b16_dpp"
-          : "v_swap_b16_e32",
+          : "v_swap_b16",
       reinterpret_cast<const Vop1::OpEncoding *>(opcode), emit_error, LiteralSupport::None, 0);
   if (validation.failed()) [[unlikely]]
     return Result::failure();
