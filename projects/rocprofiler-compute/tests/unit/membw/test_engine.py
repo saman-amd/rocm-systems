@@ -165,6 +165,32 @@ class TestSiblingExclusion:
         states = {c.id: c.state for c in result.nodes[0].children}
         assert states["other"] == "inactive"
 
+    def test_catch_all_indeterminate_when_sibling_indeterminate(self):
+        children = [
+            make_node("a", metric="ma", op="gte", threshold_key="stall_pct_high"),
+            make_node("b", metric="mb", op="gte", threshold_key="stall_pct_high"),
+            make_node(
+                "other",
+                requires_parent=True,
+                requires_siblings_false=["a", "b"],
+            ),
+        ]
+        parent = make_node(
+            "p",
+            metric="mp",
+            op="gte",
+            threshold_key="stall_pct_high",
+            children=children,
+        )
+        spec = make_tree_spec([parent])
+        result = evaluate_membw_tree(
+            spec, {"mp": 15.0, "ma": None, "mb": None}, "gfx950", "full", None
+        )
+        states = {c.id: c.state for c in result.nodes[0].children}
+        assert states["a"] == "indeterminate"
+        assert states["b"] == "indeterminate"
+        assert states["other"] == "indeterminate"
+
 
 class TestGuidanceCollection:
     def test_active_leaf_produces_guidance(self):

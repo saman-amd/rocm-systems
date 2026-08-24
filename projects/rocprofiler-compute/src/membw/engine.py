@@ -110,7 +110,7 @@ def _evaluate_node(
             node_spec.children, thresholds, metric_values, metric_units
         )
     elif node_spec.children:
-        # Inactive parent → inactive children. Indeterminate parents also
+        # Inactive parent -> inactive children. Indeterminate parents also
         # gate children inactive: if the parent metric is unavailable we
         # cannot confirm the subtree is relevant, so we suppress it.
         children = tuple(_make_inactive_subtree(child) for child in node_spec.children)
@@ -189,10 +189,15 @@ def _evaluate_catch_all(
     sibling_states: dict[str, str],
 ) -> tuple[str, str]:
     """Evaluate a catch-all node. Active only if all listed siblings are inactive."""
+    has_indeterminate = False
     for sibling_id in node_spec.requires_siblings_false:
         sibling_state = sibling_states.get(sibling_id)
+        if sibling_state == "active":
+            return ("inactive", f"sibling {sibling_id} is active")
         if sibling_state != "inactive":
-            return ("inactive", f"sibling {sibling_id} is {sibling_state}")
+            has_indeterminate = True
+    if has_indeterminate:
+        return ("indeterminate", "one or more siblings indeterminate")
     return ("active", "all listed siblings inactive")
 
 
