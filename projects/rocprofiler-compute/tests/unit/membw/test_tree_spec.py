@@ -96,6 +96,19 @@ class TestValidation:
         with pytest.raises(SystemExit):
             _validate_tree_spec(spec)
 
+    def test_missing_level_on_root_raises(self, tmp_path):
+        spec_file = tmp_path / "bad.yaml"
+        spec_file.write_text(
+            "thresholds:\n  t1: 10.0\n"
+            "nodes:\n  n:\n    metric: m\n"
+            "    op: gte\n    threshold: t1\n    label: n\n"
+            "guidance_templates: {}\n",
+            encoding="utf-8",
+        )
+        spec = _parse_tree_spec(load_yaml(spec_file))
+        with pytest.raises(SystemExit):
+            _validate_tree_spec(spec)
+
     def test_metric_without_op(self, tmp_path):
         spec_file = tmp_path / "bad.yaml"
         spec_file.write_text(
@@ -121,6 +134,19 @@ class TestValidation:
         spec = _parse_tree_spec(load_yaml(spec_file))
         with pytest.raises(SystemExit):
             _validate_tree_spec(spec)
+
+    def test_children_as_list_raises(self, tmp_path):
+        spec_file = tmp_path / "bad.yaml"
+        spec_file.write_text(
+            "thresholds:\n  t1: 10.0\n"
+            "nodes:\n  n:\n    level: GL1\n    metric: m\n"
+            "    op: gte\n    threshold: t1\n    label: n\n"
+            "    children:\n      - bad_item\n"
+            "guidance_templates: {}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit):
+            _parse_tree_spec(load_yaml(spec_file))
 
     def test_invalid_sibling_reference(self, tmp_path):
         spec_file = tmp_path / "bad.yaml"

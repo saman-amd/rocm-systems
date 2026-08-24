@@ -116,6 +116,8 @@ def _parse_nodes(
 
         level = node_dict.get("level", parent_level)
         raw_children = node_dict.get("children", {})
+        if not isinstance(raw_children, dict):
+            console_error("membw", f"Node {node_id!r}: 'children' must be a mapping")
         children = _parse_nodes(raw_children, parent_level=level)
         raw_siblings_false = node_dict.get("requires_siblings_false", [])
 
@@ -165,7 +167,7 @@ def _validate_node(
     """Validate a single node and recurse into children."""
     is_catch_all = node.requires_parent and len(node.requires_siblings_false) > 0
 
-    if node.level and node.level not in _VALID_LEVELS:
+    if node.level not in _VALID_LEVELS:
         errors.append(f"Node {node.id!r}: invalid level {node.level!r}")
 
     if is_catch_all:
