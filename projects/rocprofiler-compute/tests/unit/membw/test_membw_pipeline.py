@@ -123,11 +123,15 @@ class TestFullPipeline:
 
         metric_keys = collect_metric_keys(gfx950_spec)
         dfs = build_mock_dfs(balanced)
-        extracted = extract_metric_values(dfs, metric_keys)
-        units = extract_metric_units(dfs)
+        extraction = extract_membw_metrics(dfs, metric_keys)
 
         result = evaluate_membw_tree(
-            gfx950_spec, extracted, "gfx950", "full", None, metric_units=units
+            gfx950_spec,
+            extraction.values,
+            "gfx950",
+            extraction.availability,
+            extraction.availability_reason,
+            metric_units=extraction.units,
         )
         states = collect_node_states(result.nodes)
 
