@@ -250,6 +250,7 @@ if(USE_PROF_API)
   set(PROF_API_STR_IN "${CMAKE_SOURCE_DIR}/hipamd/include/hip/amd_detail/hip_prof_str.h")
   set(PROF_API_HDR "${HIP_COMMON_INCLUDE_DIR}/hip/hip_runtime_api.h")
   set(PROF_GL_HDR "${CMAKE_SOURCE_DIR}/hipamd/include/hip/amd_detail/amd_hip_gl_interop.h")
+  set(PROF_API_DEPRECATED "${HIP_COMMON_INCLUDE_DIR}/hip/hip_deprecated.h")
   set(PROF_API_SRC "${CMAKE_CURRENT_SOURCE_DIR}")
   set(PROF_API_GEN "${CMAKE_CURRENT_SOURCE_DIR}/hip_prof_gen.py")
   set(PROF_API_LOG "${PROJECT_BINARY_DIR}/hip_prof_gen.log.txt")
@@ -282,8 +283,8 @@ if(USE_PROF_API)
         $<TARGET_PROPERTY:amdhip64,COMPILE_OPTIONS>
         ${pp_out} ${PROF_API_NEWHDR}
     COMMAND_EXPAND_LISTS VERBATIM
-    IMPLICIT_DEPENDS C ${PROF_API_HDR} ${PROF_GL_HDR}
-    DEPENDS ${PROF_API_HDR} ${PROF_GL_HDR}
+    IMPLICIT_DEPENDS C ${PROF_API_HDR} ${PROF_GL_HDR} ${PROF_API_DEPRECATED}
+    DEPENDS ${PROF_API_HDR} ${PROF_GL_HDR} ${PROF_API_DEPRECATED}
     COMMENT "Generating new header from hip_runtime_api.h")
 
   add_custom_command(OUTPUT ${PROF_API_STR}

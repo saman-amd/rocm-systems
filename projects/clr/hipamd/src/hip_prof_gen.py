@@ -389,6 +389,7 @@ def generate_prof_header(f, api_map, callback_ids, opts_map):
   f.write('#define HIP_PROF_VER 1\n')
 
   f.write('\n#include <hip/hip_runtime_api.h>\n')
+  f.write('#include <hip/hip_deprecated.h>\n')
   f.write('#include "amd_hip_gl_interop.h"\n')
 
   # Check for non-public API

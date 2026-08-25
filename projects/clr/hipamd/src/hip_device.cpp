@@ -5,6 +5,7 @@
  */
 
 #include <hip/hip_runtime.h>
+#include <hip/hip_deprecated.h>
 #include <hip/amd_detail/hip_storage.h>
 
 #include "hip_internal.hpp"

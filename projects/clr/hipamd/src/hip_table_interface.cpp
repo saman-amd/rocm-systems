@@ -7,6 +7,7 @@
 // This is the entry point of all APIs we need to support. This file needs to
 // guarantee ABI stability so we need to see all versions.
 #include <hip/amd_detail/hip_api_trace.hpp>
+#include <hip/hip_deprecated.h> // For hipDeviceProp_tR0000
 #include "hip_internal.hpp"
 #include "utils/flags.hpp"
 #include "utils/debug.hpp"
