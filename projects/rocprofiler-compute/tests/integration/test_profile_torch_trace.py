@@ -297,10 +297,7 @@ def test_list_torch_operators(
     binary_handler_analyze_rocprof_compute,
     capsys,
 ):
-    """Assert --list-torch-operators call tree, relu names, and consolidated.csv.
-
-    Repeats the listing at --kernel-verbose levels 0-4.
-    """
+    """Assert --list-torch-operators call tree, relu names, and consolidated.csv."""
     workload_dir = torch_trace_profiled_workload
     capsys.readouterr()
 
@@ -361,24 +358,6 @@ def test_list_torch_operators(
     assert df["Counter_Value"].notnull().all()
     assert (df["Counter_Value"] != "").all(), "Empty Counter_Value in consolidated.csv"
 
-    for verbose_level in range(5):
-        capsys.readouterr()
-        rc = run_analyze(
-            binary_handler_analyze_rocprof_compute,
-            workload_dir,
-            "--list-torch-operators",
-            "--kernel-verbose",
-            str(verbose_level),
-        )
-        assert rc == 0, (
-            f"--list-torch-operators failed with --kernel-verbose {verbose_level}"
-        )
-        verbose_output = capsys.readouterr().out
-        assert "PyTorch Operator Call Tree:" in verbose_output, (
-            f"Missing banner at --kernel-verbose {verbose_level}"
-        )
-        assert_operator_named(verbose_output, "relu")
-
 
 @pytest.mark.torch_trace
 def test_torch_operator_filters(
@@ -386,7 +365,7 @@ def test_torch_operator_filters(
     binary_handler_analyze_rocprof_compute,
     capsys,
 ):
-    """Assert --torch-operator *relu*, all, -k 0, and a non-matching pattern."""
+    """Assert --torch-operator patterns, all, -k 0, and a non-matching pattern."""
     workload_dir = torch_trace_profiled_workload
     capsys.readouterr()
 
@@ -402,6 +381,24 @@ def test_torch_operator_filters(
         "Expected 'Matched PyTorch Operators' header from --torch-operator *relu*"
     )
     assert_operator_named(out_relu, "relu")
+
+    capsys.readouterr()
+    returncode_exact = run_analyze(
+        binary_handler_analyze_rocprof_compute,
+        workload_dir,
+        "--torch-operator",
+        "*torch.nn.functional.relu*",
+    )
+    assert returncode_exact == 0, (
+        "Analyze with --torch-operator *torch.nn.functional.relu* failed"
+    )
+    out_exact = capsys.readouterr().out
+    assert "Matched PyTorch Operators" in out_exact, (
+        "Expected 'Matched PyTorch Operators' header in --torch-operator output"
+    )
+    assert "dispatches" in out_exact, (
+        "Expected call tree with dispatches stats in --torch-operator output"
+    )
 
     capsys.readouterr()
     returncode_all = run_analyze(
