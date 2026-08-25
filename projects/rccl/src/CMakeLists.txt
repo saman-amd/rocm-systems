@@ -122,7 +122,6 @@ set(SRC_FILES
   include/allocator.h
   include/algorithms/CollCommon.h
   include/algorithms/CollCommon_ll128.h
-  include/algorithms/ll128_pack.h
   include/algorithms/all_reduce/all_reduce_dda.h
   include/algorithms/all_reduce/all_reduce_dda_ll.h
   include/algorithms/all_reduce/all_reduce_dda_ll_twoshot.h

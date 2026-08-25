@@ -12,7 +12,7 @@
 #include "algorithms/alltoall/alltoall_dda_fabric_ll128.h"
 #include "checks.h"
 #include "comm.h"
-#include "dda_init_detail.h" // nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer
+#include "dda_init_detail.h" // nccl_dda_detail::ddaLLBlocksPerPeerCap
 #include "debug.h"
 #include "fabric_gpu_barrier.h" // meta::comms::kDdaMaxNranks
 #include "param.h"
@@ -34,6 +34,7 @@ using meta::comms::kDdaLL128A2AMaxPerChunkBytes;
 using meta::comms::kDdaLL128A2ASlotStrideLines;
 using meta::comms::kDdaLL128DataElems;
 using meta::comms::LLLine128;
+using nccl_dda_detail::ddaLLBlocksPerPeerCap;
 using nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer;
 
 // LL128 scratch: 2 banks * nRanks slots * kDdaLL128A2ASlotStrideLines * 128B.
@@ -70,11 +71,14 @@ static inline unsigned ddaLL128A2AThreads(unsigned dflt) {
   return dflt;
 }
 
-static inline int ddaLL128A2ABlocksPerPeer(size_t perChunkBytes) {
+static inline int ddaLL128A2ABlocksPerPeer(size_t perChunkBytes, int nRanks, int nBlocksMax) {
   const size_t nWords = perChunkBytes >> 3;
   const size_t numLines = (nWords + (size_t)kDdaLL128DataElems - 1) / (size_t)kDdaLL128DataElems;
   const size_t linesPerBlock = ddaLL128A2ALinesPerBlockEnv(kDdaLL128A2ALinesPerBlock);
-  const int maxBpp = ddaLL128A2AMaxBppEnv(kDdaLLAgMaxBlocksPerPeer);
+  // The env knob may lower the per-peer fan-out but not push nRanks * bpp past
+  // the grid budget the epoch array is sized for.
+  const int maxBpp =
+    ddaLLBlocksPerPeerCap(nRanks, nBlocksMax, ddaLL128A2AMaxBppEnv(kDdaLLAgMaxBlocksPerPeer));
   if (numLines <= linesPerBlock) {
     return 1;
   }
@@ -94,17 +98,15 @@ static ncclResult_t ncclAllToAllDdaFabricLL128Typed(
   const size_t perChunkBytes = count * sizeof(T);
 
   const unsigned threads = ddaLL128A2AThreads(1024); // multiple of 16 (lanes/line)
-  int blocksPerPeer = ddaLL128A2ABlocksPerPeer(perChunkBytes);
+  int nBlocksMax = comm->ddaFabricMaxBlocks;
+  if (nBlocksMax < 1) {
+    nBlocksMax = 1;
+  }
+  const int blocksPerPeer = ddaLL128A2ABlocksPerPeer(perChunkBytes, nRanks, nBlocksMax);
 
   T** peers = reinterpret_cast<T**>(comm->ddaPeerPtrsDev);
   uint32_t* epochDev = comm->ddaLLEpochDev;
   const int epochLen = comm->ddaLLEpochLen;
-
-  // Clamp so flatBlockId (nRanks*bpp-1) stays within the device epoch array.
-  if (nRanks * blocksPerPeer > epochLen) {
-    blocksPerPeer = epochLen / nRanks;
-    if (blocksPerPeer < 1) blocksPerPeer = 1;
-  }
 
   dim3 block(threads);
   dim3 grid((unsigned)nRanks, (unsigned)blocksPerPeer);

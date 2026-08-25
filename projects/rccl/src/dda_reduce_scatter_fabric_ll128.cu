@@ -69,11 +69,6 @@ static ncclResult_t ncclReduceScatterDdaFabricLL128Typed(const void* sendbuff, v
   if (blocks == 0) {
     blocks = 1;
   }
-  // flatBlockId (blockIdx.x) must stay within the device epoch array.
-  if ((int)blocks > comm->ddaLLEpochLen) {
-    blocks = (unsigned)comm->ddaLLEpochLen;
-    if (blocks == 0) blocks = 1;
-  }
   dim3 block(threads);
   dim3 grid(blocks);
 

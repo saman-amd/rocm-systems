@@ -112,12 +112,27 @@ inline int ddaFabricMaxNBlocksForScratch() {
 
 constexpr int kDdaLLAgMaxBlocksPerPeer = 8;
 
-// Number of device epoch cells for the LL collectives. it is sized for the larger of the two
-// max(AG total blocks, AR total blocks).
+// Per-peer cap for the 2-D (nRanks x blocksPerPeer) grids: the LL all-gather and
+// both all-to-alls. The LL128 all-gather sizes its own grid and does not use this.
+// Holding nRanks * blocksPerPeer within nBlocksMax is what lets ddaLLEpochCount
+// size the epoch array from nBlocksMax alone.
+inline int ddaLLBlocksPerPeerCap(int nRanks, int nBlocksMax, int maxPerPeer = kDdaLLAgMaxBlocksPerPeer) {
+  int cap = nRanks > 0 ? nBlocksMax / nRanks : nBlocksMax;
+  if (cap > maxPerPeer) {
+    cap = maxPerPeer;
+  }
+  return cap < 1 ? 1 : cap;
+}
+
+// Number of device epoch cells for the LL collectives. Every grid is capped at
+// arMaxBlocks; the nRanks floor covers the LL all-gather and the all-to-alls, which
+// launch one column per rank even when arMaxBlocks is below the rank count. The
+// LL128 all-gather groups peers into at most nRanks - 1 columns, so the same floor
+// covers it with a cell to spare.
 inline size_t ddaLLEpochCount(int nRanks, int arMaxBlocks) {
-  const size_t ag = (size_t)nRanks * (size_t)kDdaLLAgMaxBlocksPerPeer;
+  const size_t cols = (size_t)nRanks;
   const size_t ar = (size_t)arMaxBlocks;
-  return ag > ar ? ag : ar;
+  return cols > ar ? cols : ar;
 }
 
 } // namespace nccl_dda_detail

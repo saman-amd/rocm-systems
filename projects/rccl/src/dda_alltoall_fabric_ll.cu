@@ -12,7 +12,7 @@
 #include "algorithms/alltoall/alltoall_dda_fabric_ll.h"
 #include "checks.h"
 #include "comm.h"
-#include "dda_init_detail.h" // nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer
+#include "dda_init_detail.h" // nccl_dda_detail::ddaLLBlocksPerPeerCap
 #include "debug.h"
 #include "fabric_gpu_barrier.h" // meta::comms::kDdaMaxNranks
 
@@ -26,7 +26,7 @@ namespace {
 using meta::comms::kDdaLLA2ASlotStridePkts;
 using meta::comms::kDdaLLMaxBytes;
 using meta::comms::LLPacket16;
-using nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer;
+using nccl_dda_detail::ddaLLBlocksPerPeerCap;
 
 // LL scratch: 2 banks * nRanks slots * kDdaLLA2ASlotStridePkts * 16B.
 static inline size_t ddaLLA2AScratchSize(int nRanks) {
@@ -38,14 +38,15 @@ static inline size_t ddaLLA2AScratchSize(int nRanks) {
 // is one packet per thread at 256 threads.
 constexpr size_t kDdaLLA2APktsPerBlock = 256;
 
-static inline int ddaLLA2ABlocksPerPeer(size_t perChunkBytes) {
+static inline int ddaLLA2ABlocksPerPeer(size_t perChunkBytes, int nRanks, int nBlocksMax) {
+  const int cap = ddaLLBlocksPerPeerCap(nRanks, nBlocksMax);
   const size_t nPk = perChunkBytes >> 3; // 8 payload bytes per packet
   if (nPk <= kDdaLLA2APktsPerBlock) {
     return 1;
   }
   size_t bpp = (nPk + kDdaLLA2APktsPerBlock - 1) / kDdaLLA2APktsPerBlock;
-  if (bpp > (size_t)kDdaLLAgMaxBlocksPerPeer) {
-    bpp = (size_t)kDdaLLAgMaxBlocksPerPeer;
+  if (bpp > (size_t)cap) {
+    bpp = (size_t)cap;
   }
   return (int)bpp;
 }
@@ -59,7 +60,11 @@ static ncclResult_t ncclAllToAllDdaFabricLLTyped(
   const size_t perChunkBytes = count * sizeof(T);
 
   const unsigned threads = 256;
-  const int blocksPerPeer = ddaLLA2ABlocksPerPeer(perChunkBytes);
+  int nBlocksMax = comm->ddaFabricMaxBlocks;
+  if (nBlocksMax < 1) {
+    nBlocksMax = 1;
+  }
+  const int blocksPerPeer = ddaLLA2ABlocksPerPeer(perChunkBytes, nRanks, nBlocksMax);
   dim3 block(threads);
   dim3 grid((unsigned)nRanks, (unsigned)blocksPerPeer);
 

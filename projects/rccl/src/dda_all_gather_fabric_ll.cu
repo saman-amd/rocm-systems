@@ -10,7 +10,7 @@
 #include "algorithms/all_gather/all_gather_dda_fabric_ll.h"
 #include "checks.h"
 #include "comm.h"
-#include "dda_init_detail.h" // nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer
+#include "dda_init_detail.h" // nccl_dda_detail::ddaLLBlocksPerPeerCap
 #include "debug.h"
 #include "fabric_gpu_barrier.h" // meta::comms::kDdaMaxNranks
 
@@ -25,7 +25,7 @@ namespace {
 using meta::comms::kDdaLLAgSlotStridePkts;
 using meta::comms::kDdaLLMaxBytes;
 using meta::comms::LLPacket16;
-using nccl_dda_detail::kDdaLLAgMaxBlocksPerPeer;
+using nccl_dda_detail::ddaLLBlocksPerPeerCap;
 
 // LL scratch: 2 banks * nRanks slots * kDdaLLAgSlotStridePkts * 16B.
 static inline size_t ddaLLAgScratchSize(int nRanks) {
@@ -41,14 +41,15 @@ static inline size_t ddaLLAgScratchSize(int nRanks) {
 constexpr size_t kDdaLLAgPktsPerBlock = 256;
 
 // Blocks per peer for a given per-rank payload.
-static inline int ddaLLAgBlocksPerPeer(size_t perRankBytes) {
+static inline int ddaLLAgBlocksPerPeer(size_t perRankBytes, int nRanks, int nBlocksMax) {
+  const int cap = ddaLLBlocksPerPeerCap(nRanks, nBlocksMax);
   const size_t nPk = perRankBytes >> 3; // 8 payload bytes per packet
   if (nPk <= kDdaLLAgPktsPerBlock) {
     return 1;
   }
   size_t bpp = (nPk + kDdaLLAgPktsPerBlock - 1) / kDdaLLAgPktsPerBlock;
-  if (bpp > (size_t)kDdaLLAgMaxBlocksPerPeer) {
-    bpp = (size_t)kDdaLLAgMaxBlocksPerPeer;
+  if (bpp > (size_t)cap) {
+    bpp = (size_t)cap;
   }
   return (int)bpp;
 }
@@ -57,7 +58,11 @@ static inline int ddaLLAgBlocksPerPeer(size_t perRankBytes) {
 // per-peer packet split; 256 threads/block.
 static inline std::pair<dim3, dim3> ddaAllGatherFabricLLGeom(ncclComm* comm, size_t perRankBytes) {
   const unsigned threads = 256;
-  const int blocksPerPeer = ddaLLAgBlocksPerPeer(perRankBytes);
+  int nBlocksMax = comm->ddaFabricMaxBlocks;
+  if (nBlocksMax < 1) {
+    nBlocksMax = 1;
+  }
+  const int blocksPerPeer = ddaLLAgBlocksPerPeer(perRankBytes, comm->nRanks, nBlocksMax);
   return std::make_pair(dim3((unsigned)comm->nRanks, (unsigned)blocksPerPeer), dim3(threads));
 }
 
@@ -111,6 +116,9 @@ bool ncclAllGatherDdaFabricLLEligible(ncclComm* comm, const void* sendbuff, void
                                       ncclDataType_t datatype) {
   (void)sendbuff;
   (void)recvbuff;
+  if (!rcclParamDdaLL()) {
+    return false;
+  }
   if (comm == nullptr || comm->bootstrap == nullptr) {
     return false;
   }
@@ -129,6 +137,10 @@ bool ncclAllGatherDdaFabricLLEligible(ncclComm* comm, const void* sendbuff, void
 
   const size_t perRankBytes = sendcount * ncclTypeSize(datatype);
   if (perRankBytes % 16 != 0) {
+    return false;
+  }
+
+  if (perRankBytes * (size_t)comm->nRanks > (size_t)rcclParamDdaLLThreshold()) {
     return false;
   }
   // expand from 8B to 16B

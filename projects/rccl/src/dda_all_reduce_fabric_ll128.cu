@@ -58,8 +58,8 @@ static inline unsigned ddaLL128ArThreads(unsigned dflt) {
 }
 
 // Single source of the launch geometry: 1-D grid over 128B line-groups (each
-// block has threads/16 groups), capped by the block count and clamped so
-// flatBlockId (blockIdx.x) stays within the device epoch array.
+// block has threads/16 groups), capped by ddaFabricMaxBlocks, which also bounds
+// the device epoch array so flatBlockId (blockIdx.x) always stays in range.
 static inline std::pair<dim3, dim3> ddaAllReduceFabricLL128Geom(ncclComm* comm, size_t count, int typeSize) {
   const size_t nWords = ((size_t)count * (size_t)typeSize) >> 3;
   const size_t numLines = (nWords + (size_t)kDdaLL128DataElems - 1) / (size_t)kDdaLL128DataElems;
@@ -72,10 +72,6 @@ static inline std::pair<dim3, dim3> ddaAllReduceFabricLL128Geom(ncclComm* comm, 
   unsigned blocks = (unsigned)std::min<size_t>((numLines + groups - 1) / groups, (size_t)nBlocksMax);
   if (blocks == 0) {
     blocks = 1;
-  }
-  if ((int)blocks > comm->ddaLLEpochLen) {
-    blocks = (unsigned)comm->ddaLLEpochLen;
-    if (blocks == 0) blocks = 1;
   }
   return std::make_pair(dim3(blocks), dim3(threads));
 }
