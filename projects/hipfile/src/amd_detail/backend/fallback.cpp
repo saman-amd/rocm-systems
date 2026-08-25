@@ -163,12 +163,11 @@ Fallback::async_io(IoType type, std::shared_ptr<IFile> file, std::shared_ptr<IBu
         return;
     }
 
-    size_t chunk_size  = Context<Configuration>::get()->asyncBufferSize();
+    size_t chunk_size  = stream->asyncBufferSize();
     size_t chunk_count = (limited_size + chunk_size - 1) / chunk_size;
 
-    auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(type, std::move(file), buffer, stream,
-                                                                   size_p, file_offset_p, buffer_offset_p,
-                                                                   chunk_size, bytes_transferred_p));
+    auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(
+        type, std::move(file), buffer, stream, size_p, file_offset_p, buffer_offset_p, bytes_transferred_p));
     Context<AsyncMonitor>::get()->addOp(op);
     auto  op_dev_ptr     = op->devPtr();
     void *kernel_args[1] = {&op_dev_ptr};
@@ -259,12 +258,12 @@ async_io_cpu_copy(void *userargs)
     }
 
     const size_t chunk_offset = static_cast<size_t>(op->bytes_transferred_internal);
-    const size_t chunk_count =
-        op->io_type == IoType::Read ? min(op->chunk_size, size - chunk_offset) : op->chunk_bytes_copied;
+    const size_t chunk_count  = op->io_type == IoType::Read ? min(op->bounce_buffer_size, size - chunk_offset)
+                                                            : op->chunk_bytes_copied;
 
     while (bytes_transferred < chunk_count) {
         void *cur_buf_position = reinterpret_cast<void *>(
-            reinterpret_cast<uintptr_t>(op->bounceBufferHostPtr()) + bytes_transferred);
+            reinterpret_cast<uintptr_t>(op->bounce_buffer_host_ptr) + bytes_transferred);
         hoff_t cur_file_offset = file_offset + static_cast<hoff_t>(chunk_offset + bytes_transferred);
         size_t remaining_bytes = chunk_count - bytes_transferred;
         try {

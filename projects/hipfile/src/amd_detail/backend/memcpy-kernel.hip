@@ -62,7 +62,7 @@ hipFileMemcpyKernel(AsyncOpFallback *op)
     const size_t remaining = *size_p - bytes_completed;
     const size_t size      = io_type == IoType::Read
                                  ? op->chunk_bytes_copied
-                                 : (op->chunk_size < remaining ? op->chunk_size : remaining);
+                                 : (op->bounce_buffer_size < remaining ? op->bounce_buffer_size : remaining);
     if (io_type == IoType::Write && start_idx == 0) {
         op->chunk_bytes_copied = size;
     }

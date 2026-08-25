@@ -18,7 +18,6 @@
 #include "io.h"
 #include "masyncmonitor.h"
 #include "mbuffer.h"
-#include "mconfiguration.h"
 #include "mfile.h"
 #include "mhip.h"
 #include "mstate.h"
@@ -162,12 +161,13 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_new_uses_pinned_host_memory)
     ssize_t bytes_transferred = 0;
     auto    op_data           = make_shared_void(sizeof(AsyncOpFallback));
     auto    bounce_buffer     = make_shared_void(size);
-    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get())).WillOnce(Return(bounce_buffer.get()));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer.get()), _));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get()));
+    EXPECT_CALL(*stream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferDevPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferSize).WillOnce(Return(size));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
 }
 
 TEST_F(HipFileAsyncOp, AsyncOpFallbackLimitsMaxIoSize)
@@ -178,13 +178,13 @@ TEST_F(HipFileAsyncOp, AsyncOpFallbackLimitsMaxIoSize)
     ssize_t bytes_transferred = 0;
     auto    op_data           = make_shared_void(sizeof(AsyncOpFallback));
     auto    bounce_buffer     = make_shared_void(1_KiB);
-    EXPECT_CALL(mhip, hipHostMalloc(hipFile::getMaxRwCount(), _)).WillOnce(Return(bounce_buffer.get()));
     EXPECT_CALL(mhip, hipHostMalloc(sizeof(AsyncOpFallback), _)).WillOnce(Return(op_data.get()));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer.get()), _));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
+    EXPECT_CALL(*stream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferDevPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferSize).WillOnce(Return(1_KiB));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
     ASSERT_EQ(op->submitted_size, hipFile::getMaxRwCount());
 }
 
@@ -198,44 +198,26 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_new_failure_throws_bad_alloc)
     EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Throw(Hip::RuntimeError(hipErrorOutOfMemory)));
     EXPECT_THROW(std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{IoType::Read, file, buffer, stream,
                                                                       &size, &file_offset, &buffer_offset,
-                                                                      1_MiB, &bytes_transferred}),
+                                                                      &bytes_transferred}),
                  std::bad_alloc);
 }
 
-TEST_F(HipFileAsyncOp, AsyncOpFallback_bounce_alloc_failure_throws)
+TEST_F(HipFileAsyncOp, AsyncOpFallback_stream_buffer_ptr_failure_throws)
 {
     size_t  size              = 100;
     hoff_t  file_offset       = 0;
     hoff_t  buffer_offset     = 0;
     ssize_t bytes_transferred = 0;
     auto    op_data           = make_shared_void(sizeof(AsyncOpFallback));
-    EXPECT_CALL(mhip, hipHostMalloc)
-        .WillOnce(Return(op_data.get()))
-        .WillOnce(Throw(Hip::RuntimeError(hipErrorOutOfMemory)));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get()));
+    EXPECT_CALL(*stream, asyncBufferHostPtr).WillOnce(Throw(Hip::RuntimeError(hipErrorOutOfMemory)));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
     EXPECT_THROW(std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{IoType::Read, file, buffer, stream,
                                                                       &size, &file_offset, &buffer_offset,
-                                                                      1_MiB, &bytes_transferred}),
+                                                                      &bytes_transferred}),
                  Hip::RuntimeError);
 }
 
-TEST_F(HipFileAsyncOp, AsyncOpFallback_bounce_buffer_deleter_failure_calls_syslog)
-{
-    size_t  size              = 100;
-    hoff_t  file_offset       = 0;
-    hoff_t  buffer_offset     = 0;
-    ssize_t bytes_transferred = 0;
-    auto    op_data           = make_shared_void(sizeof(AsyncOpFallback));
-    auto    bounce_buffer     = make_shared_void(size);
-    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get())).WillOnce(Return(bounce_buffer.get()));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer.get()), _));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())))
-        .WillOnce(Throw(Hip::RuntimeError(hipErrorInvalidValue)));
-    EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
-    EXPECT_CALL(msys, syslog);
-    auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
-}
 
 TEST_F(HipFileAsyncOp, AsyncOpFallback_delete_failure_calls_syslog)
 {
@@ -245,30 +227,29 @@ TEST_F(HipFileAsyncOp, AsyncOpFallback_delete_failure_calls_syslog)
     ssize_t bytes_transferred = 0;
     auto    op_data           = make_shared_void(sizeof(AsyncOpFallback));
     auto    bounce_buffer     = make_shared_void(size);
-    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get())).WillOnce(Return(bounce_buffer.get()));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer.get()), _));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get()));
+    EXPECT_CALL(*stream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferDevPtr).WillOnce(Return(bounce_buffer.get()));
+    EXPECT_CALL(*stream, asyncBufferSize).WillOnce(Return(size));
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())))
         .WillOnce(Throw(Hip::RuntimeError(hipErrorInvalidValue)));
     EXPECT_CALL(msys, syslog);
     auto op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback{
-        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, 1_MiB, &bytes_transferred});
+        IoType::Read, file, buffer, stream, &size, &file_offset, &buffer_offset, &bytes_transferred});
 }
 
 struct HipFileAsyncOpFallbackMethods : public HipFileAsyncOp {
     HipFileAsyncOpFallbackMethods() : bounce_buffer{make_shared_void(size)}
     {
         //  make_shared uses placement new, which will not use hipHostMalloc/hipHostFree for
-        //  AsyncOpFallback
-        EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(bounce_buffer.get()));
-        EXPECT_CALL(mhip, hipHostGetDevicePointer).WillOnce(Return(bounce_buffer_dev_ptr));
+        //  AsyncOpFallback. The bounce buffer is now owned by Stream.
+        EXPECT_CALL(*stream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer.get()));
+        EXPECT_CALL(*stream, asyncBufferDevPtr).WillOnce(Return(bounce_buffer_dev_ptr));
+        EXPECT_CALL(*stream, asyncBufferSize).WillOnce(Return(size));
         op = std::make_shared<AsyncOpFallback>(IoType::Read, file, buffer, stream, &size, &file_offset,
-                                               &buffer_offset, 1_MiB, &bytes_transferred);
+                                               &buffer_offset, &bytes_transferred);
     }
-    ~HipFileAsyncOpFallbackMethods() override
-    {
-        EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
-    }
+    ~HipFileAsyncOpFallbackMethods() override = default;
     void                            *bounce_buffer_dev_ptr = reinterpret_cast<void *>(0xDECDECDE);
     size_t                           size                  = 100;
     hoff_t                           file_offset           = 0;
@@ -280,7 +261,7 @@ struct HipFileAsyncOpFallbackMethods : public HipFileAsyncOp {
 
 TEST_F(HipFileAsyncOpFallbackMethods, bounceBufferHostPtr_returns_pointer)
 {
-    ASSERT_EQ(op->bounceBufferHostPtr(), bounce_buffer.get());
+    ASSERT_EQ(op->bounce_buffer_host_ptr, bounce_buffer.get());
 }
 
 TEST_F(HipFileAsyncOpFallbackMethods, devPtr_calls_hipHostGetDevicePointer)
@@ -420,7 +401,6 @@ struct FallbackAsyncIO : public HipFileOpened, public ::testing::WithParamInterf
     {
         io_type = GetParam();
     }
-    StrictMock<MConfiguration>           mconfig;
     StrictMock<MHip>                     mhip;
     StrictMock<MSys>                     msys;
     std::shared_ptr<StrictMock<MFile>>   mfile;
@@ -506,15 +486,15 @@ TEST_P(FallbackAsyncIO, attemptToQueueCleanupOnStreamSubmissionFailure)
     // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
     ASSERT_NE(op_data, nullptr);
     auto bounce_buffer = malloc(size);
-    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): owned by mstream mock
     ASSERT_NE(bounce_buffer, nullptr);
-    EXPECT_CALL(mconfig, asyncBufferSize).WillOnce(Return(size));
-    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data)).WillOnce(Return(bounce_buffer));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer), _))
-        .WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data));
+    EXPECT_CALL(*mstream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer));
+    EXPECT_CALL(*mstream, asyncBufferDevPtr).WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
+    // asyncBufferSize is called once by async_io to compute chunk_count, and once in the constructor
+    EXPECT_CALL(*mstream, asyncBufferSize).Times(2).WillRepeatedly(Return(size));
     EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(op_data), _))
         .WillOnce(Return(reinterpret_cast<void *>(0xDE000000)));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer))).WillOnce([](void *ptr) { free(ptr); });
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data))).WillOnce([](void *ptr) { free(ptr); });
     EXPECT_CALL(mhip, hipDeviceGetAttribute).WillOnce(Return(1024));
     EXPECT_CALL(*mstream, getLock);
@@ -525,7 +505,8 @@ TEST_P(FallbackAsyncIO, attemptToQueueCleanupOnStreamSubmissionFailure)
     EXPECT_THROW(Fallback().async_io(io_type, mfile, mbuffer, &size, &file_offset, &buffer_offset,
                                      &bytes_written, mstream),
                  Hip::RuntimeError);
-    // Call to allow destruction of the op and bounce buffer
+    // Call to allow destruction of the op; bounce buffer is owned by mstream, free it here
+    free(bounce_buffer);
     async_io_cleanup(op_data);
     // Sleep to allow cleanup thread to destruct op
     std::this_thread::sleep_for(500ms);
@@ -549,15 +530,15 @@ TEST_P(FallbackAsyncIO, multipleChunksAreQueued)
     // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
     ASSERT_NE(op_data, nullptr);
     auto bounce_buffer = malloc(chunk_size);
-    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): freed via mocked hipHostFree on cleanup
+    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc): owned by mstream mock
     ASSERT_NE(bounce_buffer, nullptr);
-    EXPECT_CALL(mconfig, asyncBufferSize).WillOnce(Return(chunk_size));
-    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data)).WillOnce(Return(bounce_buffer));
-    EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer), _))
-        .WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
+    EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data));
+    EXPECT_CALL(*mstream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer));
+    EXPECT_CALL(*mstream, asyncBufferDevPtr).WillOnce(Return(reinterpret_cast<void *>(0xDEBBBBBB)));
+    // asyncBufferSize is called once by async_io to compute chunk_count, and once in the constructor
+    EXPECT_CALL(*mstream, asyncBufferSize).Times(2).WillRepeatedly(Return(chunk_size));
     EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(op_data), _))
         .WillOnce(Return(reinterpret_cast<void *>(0xDE000000)));
-    EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer))).WillOnce([](void *ptr) { free(ptr); });
     EXPECT_CALL(mhip, hipHostFree(Eq(op_data))).WillOnce([](void *ptr) { free(ptr); });
     EXPECT_CALL(mhip, hipDeviceGetAttribute).WillOnce(Return(1024));
     EXPECT_CALL(*mstream, getLock);
@@ -571,6 +552,8 @@ TEST_P(FallbackAsyncIO, multipleChunksAreQueued)
     Fallback().async_io(io_type, mfile, mbuffer, &size, &file_offset, &buffer_offset, &bytes_written,
                         mstream);
     // The enqueued host functions are mocked and never run; free the op manually.
+    // Bounce buffer is owned by mstream, free it here.
+    free(bounce_buffer);
     async_io_cleanup(op_data);
     // Sleep to allow cleanup thread to destruct op
     std::this_thread::sleep_for(500ms);
@@ -590,11 +573,10 @@ struct AsyncIoOp : public ::testing::Test {
     {
         op_data       = make_shared_void(sizeof(AsyncOpFallback));
         bounce_buffer = make_shared_void(size);
-        EXPECT_CALL(mhip, hipHostMalloc)
-            .WillOnce(Return(op_data.get()))
-            .WillOnce(Return(bounce_buffer.get()));
-        EXPECT_CALL(mhip, hipHostGetDevicePointer(Eq(bounce_buffer.get()), _));
-        EXPECT_CALL(mhip, hipHostFree(Eq(bounce_buffer.get())));
+        EXPECT_CALL(mhip, hipHostMalloc).WillOnce(Return(op_data.get()));
+        EXPECT_CALL(*mstream, asyncBufferHostPtr).WillOnce(Return(bounce_buffer.get()));
+        EXPECT_CALL(*mstream, asyncBufferDevPtr).WillOnce(Return(bounce_buffer.get()));
+        EXPECT_CALL(*mstream, asyncBufferSize).WillOnce(Return(size));
         EXPECT_CALL(mhip, hipHostFree(Eq(op_data.get())));
         EXPECT_CALL(*mstream, fixedBufferOffset)
             .Times(AnyNumber())
@@ -604,7 +586,7 @@ struct AsyncIoOp : public ::testing::Test {
         EXPECT_CALL(*mstream, pageAligned).Times(AnyNumber()).WillRepeatedly(Return(true));
         EXPECT_CALL(*mbuffer, getBuffer);
         op = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(io_type, mfile, mbuffer, mstream, &size,
-                                                                  &file_offset, &buffer_offset, 1_MiB,
+                                                                  &file_offset, &buffer_offset,
                                                                   &bytes_transferred));
     }
     StrictMock<MHip>                     mhip;
@@ -789,7 +771,7 @@ struct AsyncIoOpChunked : public AsyncIoOp, public ::testing::WithParamInterface
         fixed_file_offset   = true;
         fixed_io_size       = true;
         AsyncIoOp::SetUp();
-        op->chunk_size                 = params.chunk_size;
+        op->bounce_buffer_size                 = params.chunk_size;
         op->bytes_transferred_internal = static_cast<ssize_t>(params.bytes_completed);
         // The write path consumes the chunk length the kernel publishes before cpu_copy runs.
         if (io_type == IoType::Write) {
@@ -803,7 +785,7 @@ struct AsyncIoOpChunked : public AsyncIoOp, public ::testing::WithParamInterface
 TEST_P(AsyncIoOpChunked, cpuCopyTransfersSingleChunkOfLargerIo)
 {
     auto        params          = GetParam();
-    void       *bounce_host     = op->bounceBufferHostPtr();
+    void       *bounce_host     = op->bounce_buffer_host_ptr;
     const off_t expected_offset = file_offset + static_cast<off_t>(params.bytes_completed);
     EXPECT_CALL(*mfile, bufferedFd).WillOnce(Return(7));
     if (io_type == IoType::Read) {

@@ -253,14 +253,14 @@ public:
         buffer = _buffer;
         stream = _stream;
         op     = std::shared_ptr<AsyncOpFallback>(new AsyncOpFallback(io_type, file, buffer, stream, &io_size,
-                                                                      &file_offset, &buffer_offset, chunk_size,
+                                                                      &file_offset, &buffer_offset,
                                                                       &bytes_transferred));
         bytes_transferred = static_cast<ssize_t>(io_size);
         if (io_type == IoType::Read) {
             // For a read, bytes_transferred_internal needs to be set to simulate that the read from disk
             // occurred. We fill the source (CPU bounce buffer) with random data and memset the destination
             // (GPU buffer) to zero.
-            HipFileDataOps::randomizeMemoryRegion(op->bounceBufferHostPtr(), 0, io_size);
+            HipFileDataOps::randomizeMemoryRegion(op->bounce_buffer_host_ptr, 0, io_size);
             op->bytes_transferred_internal = static_cast<ssize_t>(io_size);
             ASSERT_EQ(hipMemset(op->gpu_buffer, 0, buffer_size), hipSuccess);
             ASSERT_EQ(hipStreamSynchronize(nullptr), hipSuccess);
@@ -269,7 +269,7 @@ public:
             // For a write, we fill the source (GPU bounce buffer) with random data and memset the destination
             // (CPU bounce buffer) to zero.
             HipFileDataOps::randomizeMemoryRegion(op->gpu_buffer, 0, buffer_size);
-            memset(op->bounceBufferHostPtr(), 0, io_size);
+            memset(op->bounce_buffer_host_ptr, 0, io_size);
         }
         op_dev_ptr            = op->devPtr();
         kernel_args[0]        = {&op_dev_ptr};
@@ -390,7 +390,7 @@ TEST_P(HipAsyncMemcpyKernelWithParams, verifyIoRegions)
     if (io_type == IoType::Read) {
         HipFileDataOps::assertZeroedMemRegion(op->gpu_buffer, 0, static_cast<size_t>(chunk_gpu_offset));
     }
-    HipFileDataOps::assertMemoryRegionsMatch(op->bounceBufferHostPtr(), 0, op->gpu_buffer, chunk_gpu_offset,
+    HipFileDataOps::assertMemoryRegionsMatch(op->bounce_buffer_host_ptr, 0, op->gpu_buffer, chunk_gpu_offset,
                                              expected_chunk);
     if (io_type == IoType::Read) {
         size_t end_length = buffer_size - (static_cast<size_t>(chunk_gpu_offset) + expected_chunk);
