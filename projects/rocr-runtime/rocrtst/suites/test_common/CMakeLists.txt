@@ -802,6 +802,20 @@ set_tests_properties(intercept_queue_logic_test PROPERTIES
   LABELS "quick;standard;pr;pre-commit"
   TIMEOUT 60)
 
+# GPU-free large BAR eligibility unit tests, exercising the pure header logic in
+# hsa-runtime's core/util/large_bar.h that gates device-memory queue placement.
+set(LARGE_BAR_TEST_ROOT "${ROCRTST_ROOT}/suites/functional/large_bar")
+add_executable(large_bar_logic_test
+  ${LARGE_BAR_TEST_ROOT}/large_bar_logic_test.cc)
+target_include_directories(large_bar_logic_test PRIVATE
+  ${HSA_RUNTIME_ROOT}
+  ${ROCRTST_ROOT}/gtest/include)
+target_link_libraries(large_bar_logic_test ${GOOGLE_TEST_FRWK_NAME} pthread)
+add_test(NAME large_bar_logic_test COMMAND large_bar_logic_test)
+set_tests_properties(large_bar_logic_test PROPERTIES
+  LABELS "quick;standard;pr;pre-commit"
+  TIMEOUT 60)
+
 #Build kernels
 add_custom_target(rocrtst_kernels ALL DEPENDS ${HSACO_TARG_LIST})
 
@@ -822,6 +836,9 @@ install(TARGETS ${ROCRTST}
         RUNTIME DESTINATION bin)
 
 install(TARGETS intercept_queue_logic_test
+        RUNTIME DESTINATION bin)
+
+install(TARGETS large_bar_logic_test
         RUNTIME DESTINATION bin)
 
 # Install platform configuration file
@@ -876,6 +893,8 @@ if(EXISTS "${TEST_CATEGORIES_CMAKE}" AND EXISTS "${TEST_CATEGORIES_YAML}")
         "\n"
         "add_test(intercept_queue_logic_test \"../intercept_queue_logic_test\")\n"
         "set_tests_properties(intercept_queue_logic_test PROPERTIES LABELS \"quick;standard;pr;pre-commit\" TIMEOUT 60)\n\n"
+        "add_test(large_bar_logic_test \"../large_bar_logic_test\")\n"
+        "set_tests_properties(large_bar_logic_test PROPERTIES LABELS \"quick;standard;pr;pre-commit\" TIMEOUT 60)\n\n"
     )
 
     install(
