@@ -638,7 +638,7 @@ rocprofsys_init_tooling_hidden(void)
 
         rocprofsys_preinit_cache();
 
-#if(defined(ROCPROFSYS_USE_MPI_HEADERS) && ROCPROFSYS_USE_MPI_HEADERS > 0) ||            \
+#if(defined(ROCPROFSYS_USE_MPI_HEADERS) && ROCPROFSYS_USE_MPI_HEADERS > 0) ||           \
     (defined(ROCPROFSYS_USE_MPI) && ROCPROFSYS_USE_MPI > 0)
 
         component::mpi_gotcha::subscribe_to_init_event([](int rank, int size) {
@@ -681,7 +681,7 @@ rocprofsys_init_tooling_hidden(void)
             trace_cache::get_buffer_storage().start(getpid());
         }
 
-        rocprofiler_sdk::bind_session(get_control_session());
+        rocprofiler_sdk::set_session(get_control_session());
 
         {
             using shmem_t = component::shmem_gotcha<rocprofsys::DefaultSHMEMPolicy>;
@@ -707,9 +707,10 @@ rocprofsys_init_tooling_hidden(void)
                 get_control_session()->subscribe(std::move(sub));
             }
 
+            // Every subscriber above must be registered before this call: a
+            // trigger's registration broadcasts a pause/resume transition
+            // immediately, so any subscriber added afterward would miss it.
             rocprofiler_sdk::create_roctx_client();
-
-            get_control_session()->force_initial_pause();
         }
 
         state::process::set(
