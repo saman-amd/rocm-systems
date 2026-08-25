@@ -27,6 +27,7 @@ public:
     virtual std::unique_lock<std::mutex> getLock()                  = 0;
     virtual void                        *asyncBufferHostPtr() const = 0;
     virtual void                        *asyncBufferDevPtr() const  = 0;
+    virtual size_t                       asyncBufferSize() const    = 0;
 };
 
 class StreamMap;
@@ -44,6 +45,7 @@ public:
     virtual std::unique_lock<std::mutex> getLock() override;
     virtual void                        *asyncBufferHostPtr() const override;
     virtual void                        *asyncBufferDevPtr() const override;
+    virtual size_t                       asyncBufferSize() const override;
 
     Stream(const hipStream_t hip_stream, uint32_t flags, const PassKey<StreamMap> &k);
 
@@ -63,6 +65,7 @@ private:
 
     std::unique_ptr<void, void (*)(void *)> async_buffer;
     void                                   *async_buffer_dev_ptr;
+    size_t                                  async_buffer_size;
 };
 
 class StreamMap {
