@@ -9,8 +9,8 @@
 
 #include <cctype>
 #include <cstddef>
+#include <fmt/ranges.h>
 #include <initializer_list>
-#include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
 #include <compare>

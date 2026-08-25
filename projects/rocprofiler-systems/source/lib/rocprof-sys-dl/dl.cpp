@@ -24,7 +24,7 @@
 #include "rocprofiler-systems/categories.h"
 #include "rocprofiler-systems/types.h"
 
-#include <spdlog/fmt/fmt.h>
+#include <fmt/format.h>
 
 #include <cassert>
 #include <gnu/libc-version.h>

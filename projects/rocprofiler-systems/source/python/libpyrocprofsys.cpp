@@ -11,7 +11,7 @@
 #include "rocprofiler-systems/user.h"
 
 #include "common/environment.hpp"
-#include <spdlog/fmt/fmt.h>
+#include <fmt/format.h>
 #include <timemory/backends/process.hpp>
 #include <timemory/backends/threading.hpp>
 // Provides inline tim::get_env<bool>/<std::string> specialization definitions before
