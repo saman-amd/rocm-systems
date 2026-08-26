@@ -7266,14 +7266,17 @@ class CodeGenerator:
 
         L = []
         is_cmpswap = sem.operation == 'cmpswap'
+        is_rtn = 'RTN' in sem.name.upper()
         L.append(
             '  auto d = std::make_unique<amdgpu::VectorMemState>(amdgpu::LOCAL_MEM);'
         )
-        L.append(f"  d->dst_reg_base = {self._vgpr_base_expr('vdst', role='Dst')};")
+        # Only the RTN form has an architectural VDST; the non-returning form
+        # must leave the encoded vdst field alone.
+        if is_rtn:
+            L.append(f"  d->dst_reg_base = {self._vgpr_base_expr('vdst', role='Dst')};")
         L.append(f'  d->elem_size = {esz};')
         L.append('  d->num_elems = 1;')
-        # DS atomics always return the old value (like GLC=1).
-        L.append('  d->is_load = true;')
+        L.append(f"  d->is_load = {'true' if is_rtn else 'false'};")
         L.append(f'  d->atomic_op = {op_enum};')
         self._append_wait_counter_type(L, 'ds_atomic')
         L.append('  ds_calculate_addresses(inst_, wf, *d);')

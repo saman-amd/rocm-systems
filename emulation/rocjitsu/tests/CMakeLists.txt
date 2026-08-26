@@ -426,6 +426,7 @@ add_executable(
     cdna5_dispatch_memory_test.cpp
     cdna5_execution_test.cpp
     cdna5_instruction_test.cpp
+    cdna5_ds_atomic_test.cpp
     cdna5_sdma_test.cpp
     cdna5_tensor_dma_test.cpp
     lds_test.cpp
