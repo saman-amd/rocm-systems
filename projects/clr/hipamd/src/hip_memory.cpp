@@ -5,6 +5,7 @@
  */
 
 #include <cstring>
+#include <limits>
 #include <type_traits>
 
 #include <hip/hip_runtime.h>
@@ -17,6 +18,7 @@
 #include "platform/command.hpp"
 #include "platform/memory.hpp"
 #include "platform/external_memory.hpp"
+#include "os/os.hpp"
 namespace hip {
 
 // Guards global hipArray set
@@ -1395,6 +1397,15 @@ hipError_t ihipHostRegister(void* hostPtr, size_t sizeBytes, unsigned int flags)
                 hipExtHostRegisterUncached | hipHostRegisterIoMemory)) {
     return hipErrorInvalidValue;
   } else {
+    // The range has to be a real, fully mapped host allocation. Validate it
+    // before the overlap probe below: an out-of-range size would otherwise
+    // span unrelated allocations and be reported as
+    // hipErrorHostMemoryAlreadyRegistered instead of a bad argument.
+    if ((sizeBytes > std::numeric_limits<uintptr_t>::max() - reinterpret_cast<uintptr_t>(hostPtr)) ||
+        !amd::Os::isHostRangeMapped(hostPtr, sizeBytes)) {
+      return hipErrorInvalidValue;
+    }
+
     // Reject duplicate/overlapping registration of the same host range.
     if (amd::MemObjMap::FindOverlap(hostPtr, sizeBytes) != nullptr) {
       return hipErrorHostMemoryAlreadyRegistered;

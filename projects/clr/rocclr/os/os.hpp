@@ -148,6 +148,8 @@ class Os : AllStatic {
   inline static size_t pageSize();
   //! Return the amount of host total physical memory in bytes.
   static uint64_t hostTotalPhysicalMemory();
+  //! Return true if [addr, addr + size) is entirely mapped in this process.
+  static bool isHostRangeMapped(const void* addr, size_t size);
 
   //! Reserve a chunk of memory (priv | anon | noreserve).
   static address reserveMemory(address start, size_t size, size_t alignment = 0,

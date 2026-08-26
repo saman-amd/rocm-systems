@@ -385,6 +385,28 @@ bool Os::protectMemory(void* addr, size_t size, MemProt prot) {
   return 0 == ::mprotect(addr, size, memProtToOsProt(prot));
 }
 
+bool Os::isHostRangeMapped(const void* addr, size_t size) {
+  const size_t page = pageSize();
+  const uintptr_t end = reinterpret_cast<uintptr_t>(addr) + size;
+  uintptr_t cursor = reinterpret_cast<uintptr_t>(addr) & ~(page - 1);
+
+  // Walk the range in bounded chunks so the residency vector stays small even
+  // for a very large size.
+  constexpr size_t kMaxPagesPerQuery = 4096;
+  std::vector<unsigned char> vec(kMaxPagesPerQuery);
+
+  while (cursor < end) {
+    const size_t span = std::min(kMaxPagesPerQuery * page, static_cast<size_t>(end - cursor));
+    if (::mincore(reinterpret_cast<void*>(cursor), span, vec.data()) != 0) {
+      // ENOMEM means the range is not fully mapped; other errors are treated
+      // as unknown and left for the allocation path to diagnose.
+      return errno != ENOMEM;
+    }
+    cursor += span;
+  }
+  return true;
+}
+
 uint64_t Os::hostTotalPhysicalMemory() {
   static uint64_t totalPhys = 0;
 

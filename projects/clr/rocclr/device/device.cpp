@@ -13,6 +13,7 @@
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 #if defined(WITH_HSA_DEVICE)
 #include "device/rocm/rocdevice.hpp"
@@ -402,7 +403,10 @@ amd::Memory* MemObjMap::FindOverlap(const void* ptr, size_t size) {
   std::shared_lock lock(AllocatedLock_);
 
   uintptr_t start = reinterpret_cast<uintptr_t>(ptr);
-  uintptr_t end = start + size;  // exclusive
+  // Saturate instead of wrapping so an oversized range cannot alias low addresses.
+  uintptr_t end = (size > std::numeric_limits<uintptr_t>::max() - start)
+      ? std::numeric_limits<uintptr_t>::max()
+      : start + size;  // exclusive
 
   auto it = MemObjMap_.upper_bound(end - 1);
   if (it != MemObjMap_.begin()) {

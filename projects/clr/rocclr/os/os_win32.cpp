@@ -153,6 +153,23 @@ bool Os::protectMemory(void* addr, size_t size, MemProt prot) {
 }
 
 
+bool Os::isHostRangeMapped(const void* addr, size_t size) {
+  uintptr_t cursor = reinterpret_cast<uintptr_t>(addr);
+  const uintptr_t end = cursor + size;
+
+  while (cursor < end) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (::VirtualQuery(reinterpret_cast<LPCVOID>(cursor), &mbi, sizeof(mbi)) == 0) {
+      return false;
+    }
+    if (mbi.State != MEM_COMMIT) {
+      return false;
+    }
+    cursor = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+  }
+  return true;
+}
+
 uint64_t Os::hostTotalPhysicalMemory() {
   static uint64_t totalPhys = 0;
 
