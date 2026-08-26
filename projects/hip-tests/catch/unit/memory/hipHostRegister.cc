@@ -19,6 +19,9 @@
 
 #include <utils.hh>
 
+#include <algorithm>
+#include <limits>
+
 #define OFFSET 128
 #define INITIAL_VAL 1
 #define EXPECTED_VAL 2
@@ -832,6 +835,40 @@ HIP_TEST_CASE(Unit_hipHostRegister_DuplicateAndDisjoint) {
   HIP_CHECK(hipHostUnregister(A));
 
   free(A);
+}
+
+/**
+ * Verifies that hipHostRegister rejects a size that cannot describe a real host
+ * range with hipErrorInvalidValue, independently of any other registration that
+ * is live at the time. The size is validated before the overlap check, so an
+ * unrelated live mapping must not turn this into
+ * hipErrorHostMemoryAlreadyRegistered.
+ */
+HIP_TEST_CASE(Unit_hipHostRegister_OversizedWithLiveRegistration) {
+  constexpr size_t sizeBytes = 4096;
+  uint8_t* live = reinterpret_cast<uint8_t*>(malloc(sizeBytes));
+  REQUIRE(live != nullptr);
+  HIP_CHECK(hipHostRegister(live, sizeBytes, 0));
+
+  uint8_t* target = reinterpret_cast<uint8_t*>(malloc(sizeBytes));
+  REQUIRE(target != nullptr);
+
+  size_t devFree = 0, devTotal = 0;
+  HIP_CHECK(hipMemGetInfo(&devFree, &devTotal));
+  const size_t hostFree = HipTest::getAvailableSystemMemoryInMB() * 1024ull * 1024ull;
+  const size_t oversized = std::max(devFree, hostFree);
+
+  SECTION("Size larger than any real host allocation") {
+    HIP_CHECK_ERROR(hipHostRegister(target, oversized, 0), hipErrorInvalidValue);
+  }
+  SECTION("Size that would wrap the address space") {
+    HIP_CHECK_ERROR(hipHostRegister(target, std::numeric_limits<size_t>::max(), 0),
+                    hipErrorInvalidValue);
+  }
+
+  free(target);
+  HIP_CHECK(hipHostUnregister(live));
+  free(live);
 }
 
 HIP_TEST_CASE(Unit_hipHostRegister_Capture) {
