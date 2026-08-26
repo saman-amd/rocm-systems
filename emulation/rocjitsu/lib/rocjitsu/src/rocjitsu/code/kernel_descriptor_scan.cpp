@@ -219,4 +219,27 @@ uint32_t descriptor_vgpr_granularity_for_wavefront(rj_code_arch_t arch, uint32_t
   return 1;
 }
 
+uint32_t descriptor_user_sgpr_count_mask(rj_code_arch_t arch) {
+  namespace kd = rocr::llvm::amdhsa;
+  // Bit 6 is ENABLE_TRAP_HANDLER on every pre-gfx1250 target, so the wider mask
+  // must stay confined to gfx1250.
+  return arch == ROCJITSU_CODE_ARCH_CDNA5 ? kd::COMPUTE_PGM_RSRC2_GFX125_USER_SGPR_COUNT
+                                          : kd::COMPUTE_PGM_RSRC2_USER_SGPR_COUNT;
+}
+
+uint32_t descriptor_user_sgpr_count(rj_code_arch_t arch,
+                                    const rocr::llvm::amdhsa::kernel_descriptor_t &desc) {
+  const uint32_t mask = descriptor_user_sgpr_count_mask(arch);
+  return (desc.compute_pgm_rsrc2 & mask) >>
+         rocr::llvm::amdhsa::COMPUTE_PGM_RSRC2_USER_SGPR_COUNT_SHIFT;
+}
+
+void set_descriptor_user_sgpr_count(rj_code_arch_t arch,
+                                    rocr::llvm::amdhsa::kernel_descriptor_t &desc, uint32_t count) {
+  const uint32_t mask = descriptor_user_sgpr_count_mask(arch);
+  desc.compute_pgm_rsrc2 &= ~mask;
+  desc.compute_pgm_rsrc2 |=
+      (count << rocr::llvm::amdhsa::COMPUTE_PGM_RSRC2_USER_SGPR_COUNT_SHIFT) & mask;
+}
+
 } // namespace rocjitsu

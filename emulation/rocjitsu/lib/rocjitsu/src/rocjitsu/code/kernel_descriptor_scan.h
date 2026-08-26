@@ -57,4 +57,21 @@ scan_kernel_descriptors(std::span<const uint8_t> image, uint64_t text_offset, ui
 [[nodiscard]] uint32_t descriptor_vgpr_granularity_for_wavefront(rj_code_arch_t arch,
                                                                  uint32_t wavefront_size);
 
+/// @brief COMPUTE_PGM_RSRC2.USER_SGPR_COUNT bit mask for @p arch.
+///
+/// @details gfx1250 widened the field to six bits at [6:1] so a kernel can declare
+/// the full 32 user SGPRs; every earlier target keeps the five-bit [5:1] form.
+/// Decoding a gfx1250 descriptor with the narrow mask silently reads a declared
+/// count of 32 back as zero.
+[[nodiscard]] uint32_t descriptor_user_sgpr_count_mask(rj_code_arch_t arch);
+
+/// @brief Declared USER_SGPR_COUNT of @p desc under @p arch's field width.
+[[nodiscard]] uint32_t
+descriptor_user_sgpr_count(rj_code_arch_t arch,
+                           const rocr::llvm::amdhsa::kernel_descriptor_t &desc);
+
+/// @brief Write @p count into @p desc's USER_SGPR_COUNT under @p arch's field width.
+void set_descriptor_user_sgpr_count(rj_code_arch_t arch,
+                                    rocr::llvm::amdhsa::kernel_descriptor_t &desc, uint32_t count);
+
 } // namespace rocjitsu
