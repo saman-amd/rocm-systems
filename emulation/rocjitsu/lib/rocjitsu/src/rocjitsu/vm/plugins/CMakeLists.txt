@@ -6,6 +6,12 @@
 # NOT contain the loader export symbols — those live in separate
 # plugin_export.cpp sources compiled only into the shared objects.
 rj_add_object_library(
+    rocjitsu_plugin_fidelity
+    fidelity/plugin.cpp
+    fidelity/core/semantic_fidelity.cpp
+)
+
+rj_add_object_library(
     rocjitsu_plugin_logging
     logging/plugin.cpp
 )
@@ -105,6 +111,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         install(TARGETS ${target} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
     endfunction()
 
+    rj_add_plugin_so(fidelity rocjitsu_plugin_fidelity
+        ${CMAKE_CURRENT_SOURCE_DIR}/fidelity/plugin_export.cpp
+    )
     rj_add_plugin_so(logging rocjitsu_plugin_logging
         ${CMAKE_CURRENT_SOURCE_DIR}/logging/plugin_export.cpp
     )

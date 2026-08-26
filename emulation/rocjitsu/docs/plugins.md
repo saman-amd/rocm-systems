@@ -11,6 +11,7 @@ wavefront dispatches, memory instructions, register reads, barriers, etc.
 | `RaceDetectorPlugin` | `race_detector/` | Hooks memory instructions, register reads, barriers, and `s_waitcnt` to detect data races. Reports violations with disassembly traces. See [race-detector.md](race-detector.md). |
 | `KernelLoggingPlugin` | `logging/` | Logs kernel dispatches and detects MMA instruction usage. |
 | `ThroughputPlugin` | `throughput/` | Reports per-dispatch and aggregate wave-instruction MIPS with an exclusive instruction-family breakdown. |
+| `FidelityPlugin` | `fidelity/` | Reports how faithfully each executed instruction was emulated, and whether any non-exact value reached control flow, addressing, or synchronization. |
 
 The race detector plugin contains both the core detection algorithm
 (`race_detector/core/`) and the rocjitsu adapter (`race_detector/plugin.h`).
@@ -62,6 +63,48 @@ For a machine-readable report:
 ```
 
 The report is written to `/tmp/rocjitsu-throughput/throughput.log`.
+
+### Fidelity Plugin
+
+The throughput plugin answers "did this kernel run, and how fast"; the fidelity
+plugin answers "are its results trustworthy". Those are independent: a run can
+complete with a correct-looking instruction count while its numeric results
+came from approximations, so structural validity alone is not evidence of
+numeric validity.
+
+Every retired instruction is classified as:
+
+- **`exact`** — the emulated result is bit-identical to hardware.
+- **`approximate`** — the result comes from a numeric approximation
+  (`isa/arch/amdgpu/shared/transcendental.h`, which targets the ISA manual's
+  ULP bounds, or `shared/pseudo_scalar.h`, which defers to host libm), or the
+  opcode retires without performing an architected side effect the emulator
+  does not model.
+- **`unsupported`** — no semantics exist for the opcode.
+
+The plugin also tracks which registers hold a value derived from a non-exact
+computation, and reports when such a value is consumed by an instruction that
+uses it for **control flow**, **addressing**, or **synchronization**. This is
+the distinction that matters most in CI: an approximation that only reaches a
+stored result bounds the error and an output tolerance can absorb it, whereas
+the same value steering a branch or forming an address means the emulated run
+may have taken a path hardware would not, which no output tolerance detects.
+
+`numerically_validated` is true only when every instruction was exact and no
+non-exact value reached a sink.
+
+```json
+{"schema":"rocjitsu.fidelity.v1","record":"dispatch","dispatch_id":1,
+ "kernel_name":"vector_add","kernel_symbol":"vector_add.kd",
+ "wave_instructions":6,"numerically_validated":false,
+ "fidelity":{"exact":4,"approximate":2,"unsupported":0},
+ "tainted_sinks":{"control_flow":0,"addressing":0,"synchronization":0},
+ "inexact_instructions":{"v_rcp_f32_e32":{"count":1,"reason":"numeric_approximation"},
+                         "v_sqrt_f32_e32":{"count":1,"reason":"numeric_approximation"}}}
+```
+
+A `summary` record with the same shape is emitted at shutdown, aggregated over
+every dispatch.
 
 ### Kernel Logging Plugin
 

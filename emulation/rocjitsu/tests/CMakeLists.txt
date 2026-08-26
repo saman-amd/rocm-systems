@@ -17,6 +17,7 @@ set(RJ_OBJECT_LIBS
     rocjitsu_kmd
     rocjitsu_vm
     rocjitsu_vm_amdgpu
+    rocjitsu_plugin_fidelity
     rocjitsu_plugin_logging
     rocjitsu_plugin_race_detector
     rocjitsu_plugin_throughput
@@ -536,6 +537,7 @@ add_executable(
     simd_correctness/vop3p_mov_b32_simd_correctness_test.cpp
     simd_correctness/vop3p_dot_simd_correctness_test.cpp
     execution_plugin_test.cpp
+    fidelity_plugin_test.cpp
     plugin_config_resolver_test.cpp
     plugin_loader_test.cpp
     race-detector/race_detector_event_registry_test.cpp
