@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <vector>
 
 #define OFFSET 128
 #define INITIAL_VAL 1
@@ -846,29 +848,24 @@ HIP_TEST_CASE(Unit_hipHostRegister_DuplicateAndDisjoint) {
  */
 HIP_TEST_CASE(Unit_hipHostRegister_OversizedWithLiveRegistration) {
   constexpr size_t sizeBytes = 4096;
-  uint8_t* live = reinterpret_cast<uint8_t*>(malloc(sizeBytes));
-  REQUIRE(live != nullptr);
-  HIP_CHECK(hipHostRegister(live, sizeBytes, 0));
-
-  uint8_t* target = reinterpret_cast<uint8_t*>(malloc(sizeBytes));
-  REQUIRE(target != nullptr);
+  std::vector<uint8_t> live(sizeBytes);
+  std::vector<uint8_t> target(sizeBytes);
 
   size_t devFree = 0, devTotal = 0;
   HIP_CHECK(hipMemGetInfo(&devFree, &devTotal));
   const size_t hostFree = HipTest::getAvailableSystemMemoryInMB() * 1024ull * 1024ull;
-  const size_t oversized = std::max(devFree, hostFree);
 
-  SECTION("Size larger than any real host allocation") {
-    HIP_CHECK_ERROR(hipHostRegister(target, oversized, 0), hipErrorInvalidValue);
-  }
-  SECTION("Size that would wrap the address space") {
-    HIP_CHECK_ERROR(hipHostRegister(target, std::numeric_limits<size_t>::max(), 0),
-                    hipErrorInvalidValue);
-  }
+  HIP_CHECK(hipHostRegister(live.data(), sizeBytes, 0));
+  // Release the registration even if an assertion below fails, so a failure
+  // cannot pollute later tests sharing this process.
+  std::unique_ptr<void, void (*)(void*)> registration(
+      live.data(), [](void* ptr) { static_cast<void>(hipHostUnregister(ptr)); });
 
-  free(target);
-  HIP_CHECK(hipHostUnregister(live));
-  free(live);
+  const size_t sizes[] = {std::max(devFree, hostFree), std::numeric_limits<size_t>::max()};
+  for (size_t size : sizes) {
+    CAPTURE(size);
+    HIP_CHECK_ERROR(hipHostRegister(target.data(), size, 0), hipErrorInvalidValue);
+  }
 }
 
 HIP_TEST_CASE(Unit_hipHostRegister_Capture) {
