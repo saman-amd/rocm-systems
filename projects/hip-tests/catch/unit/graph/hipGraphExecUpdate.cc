@@ -799,6 +799,92 @@ HIP_TEST_CASE(Unit_hipGraphExecUpdate_Functional_KernelFunction_Changed) {
 }
 
 /**
+ * Test Description
+ * ------------------------
+ *  - Test verifies that repeatedly updating a single long-lived executable graph does
+ *    not grow device memory. The kernel argument pool of an exec is only reclaimed when
+ *    the exec is destroyed, so an update that consumes a fresh slot per node instead of
+ *    reusing the node's previous one exhausts the pool and then the device.
+ * Test source
+ * ------------------------
+ *  - unit/graph/hipGraphExecUpdate.cc
+ * Test requirements
+ * ------------------------
+ *  - HIP_VERSION >= 6.0
+ */
+HIP_TEST_CASE(Unit_hipGraphExecUpdate_Positive_KernArgPoolReuse) {
+  constexpr size_t kNodes = 32;
+  constexpr size_t kUpdates = 4096;
+  constexpr int kLen = 256;
+
+  int* buf{nullptr};
+  HIP_CHECK(hipMalloc(&buf, kLen * sizeof(int)));
+
+  size_t len = kLen;
+  std::vector<void*> kernelArgs(4);
+  kernelArgs[0] = &buf;
+  kernelArgs[1] = &buf;
+  kernelArgs[2] = &buf;
+  kernelArgs[3] = &len;
+
+  auto buildGraph = [&]() {
+    hipGraph_t graph{};
+    HIP_CHECK(hipGraphCreate(&graph, 0));
+    hipGraphNode_t prev{};
+    for (size_t i = 0; i < kNodes; ++i) {
+      hipKernelNodeParams params{};
+      params.func = reinterpret_cast<void*>(HipTest::vectorADD<int>);
+      params.gridDim = dim3(1);
+      params.blockDim = dim3(64);
+      params.sharedMemBytes = 0;
+      params.kernelParams = kernelArgs.data();
+      params.extra = nullptr;
+      hipGraphNode_t node{};
+      HIP_CHECK(hipGraphAddKernelNode(&node, graph, i == 0 ? nullptr : &prev, i == 0 ? 0 : 1,
+                                      &params));
+      prev = node;
+    }
+    return graph;
+  };
+
+  hipGraph_t graph = buildGraph();
+  hipGraphExec_t graphExec{};
+  HIP_CHECK(hipGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
+
+  hipStream_t stream{};
+  HIP_CHECK(hipStreamCreate(&stream));
+  HIP_CHECK(hipGraphLaunch(graphExec, stream));
+  HIP_CHECK(hipStreamSynchronize(stream));
+
+  size_t freeBefore = 0, total = 0;
+  HIP_CHECK(hipMemGetInfo(&freeBefore, &total));
+
+  for (size_t i = 0; i < kUpdates; ++i) {
+    hipGraph_t updated = buildGraph();
+    hipGraphNode_t errorNode{};
+    hipGraphExecUpdateResult updateResult;
+    HIP_CHECK(hipGraphExecUpdate(graphExec, updated, &errorNode, &updateResult));
+    REQUIRE(hipGraphExecUpdateSuccess == updateResult);
+    HIP_CHECK(hipGraphDestroy(updated));
+  }
+
+  size_t freeAfter = 0;
+  HIP_CHECK(hipMemGetInfo(&freeAfter, &total));
+
+  // The exec is still alive, so nothing it owns may have been reclaimed; any drop in
+  // free memory is pool growth that would keep accumulating for the exec's lifetime.
+  REQUIRE(freeAfter >= freeBefore);
+
+  HIP_CHECK(hipGraphLaunch(graphExec, stream));
+  HIP_CHECK(hipStreamSynchronize(stream));
+
+  HIP_CHECK(hipStreamDestroy(stream));
+  HIP_CHECK(hipGraphExecDestroy(graphExec));
+  HIP_CHECK(hipGraphDestroy(graph));
+  HIP_CHECK(hipFree(buf));
+}
+
+/**
  * End doxygen group GraphTest.
  * @}
  */

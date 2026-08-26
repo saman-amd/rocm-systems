@@ -163,6 +163,20 @@ class GraphKernelArgManager : public amd::ReferenceCountedObject,
   // Do HDP flush/When HDP flush register is invalid fallback to Readback
   void ReadBackOrFlush();
 
+  //! Re-form the packets of |owner| reusing the kernarg segments it was given the
+  //! previous time it was captured, instead of consuming fresh pool space.
+  //!
+  //! An exec update cannot change a node's kernel, so every re-capture of a node asks
+  //! for the same sequence of (size, alignment) segments. Without this the bump
+  //! allocator would hand out a new segment on every hipGraphExecUpdate and never
+  //! reclaim the old one, so a long-lived exec updated per iteration grows the pool
+  //! until the device is exhausted.
+  void BeginSlotReuse(const void* owner) {
+    reuse_owner_ = owner;
+    reuse_cursor_ = 0;
+  }
+  void EndSlotReuse() { reuse_owner_ = nullptr; }
+
  private:
   struct KernelArgPoolGraph {
     KernelArgPoolGraph(address base_addr, size_t size)
@@ -171,9 +185,33 @@ class GraphKernelArgManager : public amd::ReferenceCountedObject,
     size_t kernarg_pool_size_;    //! Size of the pool
     size_t kernarg_pool_offset_;  //! Current offset in the kernel arg alloc
   };
+
+  //! A kernarg segment handed out to a node, remembered so a re-capture can reuse it.
+  struct KernelArgSlot {
+    address addr;
+    size_t size;
+    size_t alignment;
+    int devId;
+  };
+
+  //! Append a freshly bump-allocated segment to the current owner's recorded sequence.
+  void RecordKernArgSlot(address addr, size_t size, size_t alignment, int devId) {
+    if (reuse_owner_ == nullptr) {
+      return;
+    }
+    auto& slots = reuse_slots_[reuse_owner_];
+    slots.resize(reuse_cursor_);
+    slots.push_back({addr, size, alignment, devId});
+    ++reuse_cursor_;
+  }
+
   bool device_kernarg_pool_ = false;  //! Indicate if kernel pool in device mem
   std::unordered_map<amd::Device*, std::vector<KernelArgPoolGraph>>
       kernarg_graph_;  //! Vector of allocated kernarg pool per device
+  //! Segments issued per capture owner, in the order the owner requested them.
+  std::unordered_map<const void*, std::vector<KernelArgSlot>> reuse_slots_;
+  const void* reuse_owner_ = nullptr;  //! Owner currently being re-captured, if any
+  size_t reuse_cursor_ = 0;            //! Next segment of reuse_owner_ to serve
   using KernelArgImpl = device::Settings::KernelArgImpl;
 };
 

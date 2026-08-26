@@ -520,6 +520,9 @@ graph:
   Unit_hipGraphExecUpdate_Functional_KernelFunction_Changed:
     <<: *level_2
     tags: [exec]
+  Unit_hipGraphExecUpdate_Positive_KernArgPoolReuse:
+    <<: *level_2
+    tags: [exec]
   Unit_hipGraphExecEventRecordNodeSetEvent_Functional:
     <<: *level_2
     tags: [exec]

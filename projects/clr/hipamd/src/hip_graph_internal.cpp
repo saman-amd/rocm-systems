@@ -2047,8 +2047,15 @@ hipError_t GraphExecSegmented::CaptureAndFormPacketsForGraph() {
           std::vector<uint8_t*> nodePackets;
           std::vector<const std::string*> nodeKernelNames;
           std::vector<uint8_t*> nodeMetadataPackets;
-          status = currentNode->CaptureAndFormPacket(GetKernelArgManager(), &nodePackets,
+          auto* kernArgMgr = GetKernelArgManager();
+          if (kernArgMgr != nullptr) {
+            kernArgMgr->BeginSlotReuse(currentNode);
+          }
+          status = currentNode->CaptureAndFormPacket(kernArgMgr, &nodePackets,
                                                      &nodeKernelNames, &nodeMetadataPackets);
+          if (kernArgMgr != nullptr) {
+            kernArgMgr->EndSlotReuse();
+          }
 
           if (status != hipSuccess || nodePackets.empty()) {
             LogError("Packet capture failed");
@@ -2251,9 +2258,15 @@ hipError_t GraphExecSegmented::UpdateAQLPacket(hip::GraphNode* node) {
       if (saved_enabled_state == 0) {
         node->SetEnabled(1);
       }
+      if (kernArgManager_ != nullptr) {
+        kernArgManager_->BeginSlotReuse(node);
+      }
       hipError_t status = node->CaptureAndFormPacket(kernArgManager_, &newPackets,
                                                                       &newKernelNames,
                                                                       &newMetadataPackets);
+      if (kernArgManager_ != nullptr) {
+        kernArgManager_->EndSlotReuse();
+      }
       node->SetEnabled(saved_enabled_state);
       if (status != hipSuccess) {
         return status;
@@ -3404,6 +3417,22 @@ address GraphKernelArgManager::AllocKernArg(size_t size, size_t alignment, int d
   amd::Device* device = g_devices[devId]->devices()[0];
   assert(alignment != 0 && "Alignment must be non-zero");
 
+  // A re-capture asks for the same segments in the same order, so hand back the ones
+  // already issued to this owner. Only an identical request can reuse a segment; a
+  // mismatch means the recorded sequence no longer describes the owner, so the rest of
+  // it is dropped and this and every later segment is allocated fresh.
+  if (reuse_owner_ != nullptr) {
+    auto& slots = reuse_slots_[reuse_owner_];
+    if (reuse_cursor_ < slots.size()) {
+      const KernelArgSlot& slot = slots[reuse_cursor_];
+      if (slot.size == size && slot.alignment == alignment && slot.devId == devId) {
+        ++reuse_cursor_;
+        return slot.addr;
+      }
+      slots.resize(reuse_cursor_);
+    }
+  }
+
   // Check if we have any pools allocated for this device
   auto& device_pools = kernarg_graph_[device];
   if (device_pools.empty()) {
@@ -3418,6 +3447,7 @@ address GraphKernelArgManager::AllocKernArg(size_t size, size_t alignment, int d
   // Check if allocation fits in current pool
   if (new_pool_usage <= current_pool.kernarg_pool_size_) {
     current_pool.kernarg_pool_offset_ = new_pool_usage;
+    RecordKernArgSlot(aligned_addr, size, alignment, devId);
     return aligned_addr;
   }
 
